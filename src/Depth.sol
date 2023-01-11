@@ -11,7 +11,7 @@ import {LiquidityMath}  from 'v3-core/contracts/libraries/LiquidityMath.sol';
 contract Depth {
 
     function calculateLowerAmt0(address poolAddress, uint256 sqrtDepthX96
-                   ) public returns (uint256) {
+                   ) public view returns (uint256) {
         
         IUniswapV3Pool pool = IUniswapV3Pool(address(poolAddress));
 
@@ -25,7 +25,6 @@ contract Depth {
         uint128 sqrtPriceX96Below = uint128(FullMath.mulDiv(sqrtPriceX96, 1 << 96, sqrtDepthX96));
         uint160 sqrtPriceRatioNext = sqrtPriceX96;
         
-        
         // set up incrimental variables
         uint256 amt0 = 0;
         int128 liquidityNet = 0;
@@ -33,8 +32,8 @@ contract Depth {
         // determine lower tick of current range
         int24 tickNext = (curTick / tickSpacing) * tickSpacing;
 
-        while (sqrtPriceX96Below < sqrtPriceRatioNext) ) {
-            uint160 sqrtPriceRatioNext = TickMath.getSqrtRatioAtTick(tickNext);
+        while (sqrtPriceX96Below < sqrtPriceRatioNext) {
+            sqrtPriceRatioNext = TickMath.getSqrtRatioAtTick(tickNext);
 
             if (sqrtPriceRatioNext < sqrtPriceX96Below) {
                 sqrtPriceRatioNext = sqrtPriceX96Below;
