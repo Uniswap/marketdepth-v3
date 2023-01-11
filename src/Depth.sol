@@ -9,46 +9,80 @@ import {LiquidityMath}  from 'v3-core/contracts/libraries/LiquidityMath.sol';
 
 
 contract Depth {
+    IUniswapV3Pool pool;
+
+    struct DepthCache {
+        // pool level characteristics
+        uint160 sqrtPriceX96;
+        int24 tick;
+        uint128 liquidity;
+        int24 tickSpacing;
+
+        // depth cache information
+        uint256 amt0;
+        uint256 amt1;
+        // if down then -1 if up then 1
+        bool downOrUp;
+        int24 tickNext;
+        uint160 sqrtPriceRatioNext;
+    }
 
     function calculateLowerAmt0(address poolAddress, uint256 sqrtDepthX96
-                   ) public view returns (uint256) {
+                   ) public returns (uint256) {
         
-        IUniswapV3Pool pool = IUniswapV3Pool(address(poolAddress));
-
+        pool = IUniswapV3Pool(address(poolAddress));
+        
         // load current state variables
-        (uint160 sqrtPriceX96, int24 curTick,,,,,) = pool.slot0();
+        (uint160 sqrtPriceX96, int24 tick,,,,,) = pool.slot0();
+
         uint128 liquidity = pool.liquidity();
         int24 tickSpacing = pool.tickSpacing();
         
+        DepthCache memory cache = 
+            DepthCache({
+                sqrtPriceX96: sqrtPriceX96,
+                tick: tick, 
+                liquidity: pool.liquidity(),
+                tickSpacing: pool.tickSpacing(),
+                amt0: 0,
+                amt1: 0,
+                downOrUp: false,
+                tickNext: 0,
+                sqrtPriceRatioNext: sqrtPriceX96
+            });
+
         // calculate sqrtPriceRatios at the given depth
-        uint128 sqrtPriceX96Above = uint128(FullMath.mulDiv(sqrtPriceX96, sqrtDepthX96, 1 << 96));
-        uint128 sqrtPriceX96Below = uint128(FullMath.mulDiv(sqrtPriceX96, 1 << 96, sqrtDepthX96));
-        uint160 sqrtPriceRatioNext = sqrtPriceX96;
+        uint128 sqrtPriceX96Above = uint128(FullMath.mulDiv(cache.sqrtPriceX96, sqrtDepthX96, 1 << 96));
+        uint128 sqrtPriceX96Below = uint128(FullMath.mulDiv(cache.sqrtPriceX96, 1 << 96, sqrtDepthX96));
         
-        // set up incrimental variables
-        uint256 amt0 = 0;
-        int128 liquidityNet = 0;
 
         // determine lower tick of current range
-        int24 tickNext = (curTick / tickSpacing) * tickSpacing;
+        cache.tickNext = (cache.tick / cache.tickSpacing) * cache.tickSpacing;
 
-        while (sqrtPriceX96Below < sqrtPriceRatioNext) {
-            sqrtPriceRatioNext = TickMath.getSqrtRatioAtTick(tickNext);
-
-            if (sqrtPriceRatioNext < sqrtPriceX96Below) {
-                sqrtPriceRatioNext = sqrtPriceX96Below;
+        
+        int128 direction = 1;
+        if (cache.downOrUp) {
+                direction = -1;
             }
 
-            uint256 deltaAmt0 = SqrtPriceMath.getAmount0Delta(sqrtPriceX96, sqrtPriceRatioNext, liquidity, false);
-            amt0 = amt0 + deltaAmt0;
-        
-            // shift to one tick spacing lower
-            tickNext = ((tickNext / tickSpacing) - 1 ) * tickSpacing;
-            (, liquidityNet,,,,,,)  = pool.ticks(tickNext);
-            sqrtPriceX96 = sqrtPriceRatioNext;
-            liquidity = LiquidityMath.addDelta(liquidity, -liquidityNet);
+        int128 liquidityNet = 0;
+        while (sqrtPriceX96Below < cache.sqrtPriceRatioNext) {
+            cache.sqrtPriceRatioNext = TickMath.getSqrtRatioAtTick(cache.tickNext);
+
+            if (cache.sqrtPriceRatioNext < sqrtPriceX96Below) {
+                cache.sqrtPriceRatioNext = sqrtPriceX96Below;
+            }
+
+            uint256 deltaAmt0 = SqrtPriceMath.getAmount0Delta(cache.sqrtPriceX96, cache.sqrtPriceRatioNext, cache.liquidity, false);
+            cache.amt0 = cache.amt0 + deltaAmt0;
+
+            // shift ticks
+            cache.tickNext = ((cache.tickNext / cache.tickSpacing) - int24(direction)) * cache.tickSpacing;
+            (, liquidityNet,,,,,,)  = pool.ticks(cache.tickNext);
+            cache.sqrtPriceX96 = cache.sqrtPriceRatioNext;
+            cache.liquidity = LiquidityMath.addDelta(cache.liquidity, direction * liquidityNet);
         }
 
-        return amt0;
+        return cache.amt0;
     }
 }
