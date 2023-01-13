@@ -24,8 +24,11 @@ contract DepthTest is Test {
         // // sqrt(1.02) * 2^96 = 80016521857016597127997947904
         // uint256 sqrtDepthX96 = 80016521857016597127997947904;
 
-        uint256 depth_return = depth.calculateDepth(0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8, 80016521857016597127997947904, true, false);
+        uint256 depth_return = depth.calculateDepth(0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8, 80016521857016597127997947904, false, false);
         log_named_uint("Current token0 depth", depth_return);
+
+        // uint256 depth_return = depth.calculateDepth(0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8, 80016521857016597127997947904, false, false);
+        // log_named_uint("Current token1 depth", depth_return);
         
         assertEq(true, true);
     }
