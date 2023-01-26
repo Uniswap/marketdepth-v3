@@ -12,62 +12,83 @@ contract Depth {
 
     // good practice to specify visibility of vars, these are default internal which is fine
     IUniswapV3Pool pool;
+
     // pack vars in a struct to save gas, up to 256 bits
     struct PoolVariables {
         int24 tick;
         int24 tickSpacing;
         uint128 liquidity;
     }
+    PoolVariables poolVars;
+
     uint160 sqrtPriceX96;
-    int24 tick;
-    uint128 liquidity;
-    int24 tickSpacing;
+    bool token1;
 
     PoolVariables internal poolVariables;
 
-
-    // consider initializing the pool variables in a separate function: initializePoolVariables(address pool)
-    // that way you could call calculateDepth multiple times in the same txn if you want different depths on the same pool
-    function calculateDepth(address poolAddress, uint256 sqrtDepthX96, bool token0, bool both) public returns (uint256) {
-        uint256 returnAmt = 0;
-
+    function initializePoolVariables(address poolAddress) private {
+        // todo ask what this means
         // also probably dont need pool as a storage var, just save whatever info u need from this pool ie looks like u use liquidity net
         pool = IUniswapV3Pool(address(poolAddress));
         
+        int24 tick;
         // load data into global memory
         (sqrtPriceX96, tick,,,,,) = pool.slot0();
-        liquidity = pool.liquidity();
-        tickSpacing = pool.tickSpacing();
 
+        poolVars = PoolVariables({
+                tick: tick,
+                tickSpacing: pool.tickSpacing(),
+                liquidity: pool.liquidity()
+            });
+    }
 
-        
-        if (token0) {
-            returnAmt+=calculateOneSide(token0, sqrtDepthX96, false);
-            if (both) {
-                returnAmt+=calculateOneSide(token0, sqrtDepthX96, true);
-            }
-        } else {
-            returnAmt+=calculateOneSide(token0, sqrtDepthX96, true);
-            if (both) {
-                returnAmt+=calculateOneSide(token0, sqrtDepthX96, false);
-            }
+    function calculateMultipleDepth(address poolAddress, uint256[] calldata sqrtDepthX96, 
+                                    bool[] calldata token1, bool[] calldata both) public returns (uint256[] memory) {
+        require((sqrtDepthX96.length == token1.length) &&
+                 sqrtDepthX96.length == both.length, 'Different lengths provided');
+
+        initializePoolVariables(poolAddress);
+
+        // we ensured that all the variables are the same length, so shouldn't be too problematic to do this
+        uint256[] memory returnArray = new uint[](sqrtDepthX96.length);
+        uint256 tokenAmt;
+
+        for (uint i=0; i<sqrtDepthX96.length; i++) {
+            tokenAmt = _calculateDepth(sqrtDepthX96[i], token1[i], both[i]);
+
+            returnArray[i] = tokenAmt;
         }
 
-        // nit: consider doing 
-        // if (both) {
-        //     calculateOneSide(.. true)
-        //     calculateOneSide(..false)
-        // } else {
-        //     calculateOneSide(..token0)
-        // }
+        return returnArray;
+    }
 
+    function calculateDepth(address poolAddress, uint256 sqrtDepthX96, bool token1, bool both) public returns (uint256) {
+        initializePoolVariables(poolAddress);
+
+        return _calculateDepth(sqrtDepthX96, token1, both);
+    }
+
+    // consider initializing the pool variables in a separate function: initializePoolVariables(address pool)
+    // that way you could call calculateDepth multiple times in the same txn if you want different depths on the same pool
+    function _calculateDepth(uint256 sqrtDepthX96, bool token1, bool both) private returns (uint256) {
+        uint256 returnAmt = 0;
+
+        // put it into global
+        token1 = token1; 
+
+        if (both) {
+            returnAmt+=calculateOneSide(sqrtDepthX96, token1);
+            returnAmt+=calculateOneSide(sqrtDepthX96, !token1);
+        } else {
+            returnAmt+=calculateOneSide(sqrtDepthX96, token1);
+        }
+       
         return returnAmt;
     }
 
     // can just send one bool into this function to determine direction
     // calculateOneSide(bool zeroForOne, uint256 sqrtDepthX96)
-    function calculateOneSide(bool token0, uint256 sqrtDepthX96, bool upper) private returns (uint256) {
-        
+    function calculateOneSide(uint256 sqrtDepthX96, bool upper) private returns (uint256) {
         uint160 sqrtPriceRatioNext = sqrtPriceX96;
         uint160 sqrtPriceX96Current = sqrtPriceX96;
 
@@ -76,23 +97,25 @@ contract Depth {
         // overflow potential?
         uint128 sqrtPriceX96Tgt = upper ? uint128(FullMath.mulDiv(sqrtPriceX96, sqrtDepthX96, 1 << 96))
                                         : uint128(FullMath.mulDiv(sqrtPriceX96, 1 << 96, sqrtDepthX96));
+        
+        // todo check if underflow can occur
+        if (upper) { 
+            require(sqrtPriceX96 <= sqrtPriceX96Tgt);
+        }
 
         // todo ask q
         // shift lower if calculating lower
         // shift upper if calculating upper
-        int24 tickNext = upper ? ((tick / tickSpacing) + 1) * tickSpacing
-                               : (tick / tickSpacing) * tickSpacing;
+        // this is simulating floor and ceiling to tick spacing
+        int24 tickNext = upper ? ((poolVars.tick / poolVars.tickSpacing) + 1) * poolVars.tickSpacing
+                               : (poolVars.tick / poolVars.tickSpacing) * poolVars.tickSpacing;
 
         int24 direction = upper ? int24(1)
                                   : int24(-1);
 
         int128 liquidityNet = 0;
-        uint128 liquiditySpot = liquidity;
+        uint128 liquiditySpot = poolVars.liquidity;
         uint256 tokenAmt = 0;
-
-        // adjust this to account for lower or up
-        // console.log(sqrtPriceRatioNext);
-        // console.log(sqrtPriceX96Tgt);
 
         while (upper ? sqrtPriceRatioNext < sqrtPriceX96Tgt
                   : sqrtPriceRatioNext > sqrtPriceX96Tgt) {
@@ -106,8 +129,8 @@ contract Depth {
                 sqrtPriceRatioNext = sqrtPriceX96Tgt;
             }
 
-            tokenAmt += token0 ? SqrtPriceMath.getAmount0Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquidity, false)
-                                 : SqrtPriceMath.getAmount1Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquidity, false);
+            tokenAmt += token1 ? SqrtPriceMath.getAmount1Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false)
+                                 : SqrtPriceMath.getAmount0Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false);
 
             // find the amount of liquidity to shift before we calculate the next tick
             // kick out or add in the liquidiy that we are moving
@@ -120,10 +143,10 @@ contract Depth {
             // find what tick we will be shifting to
             // shift the range 
             // todo q why is this different than the calculation above?
-            tickNext = ((tickNext / tickSpacing) + direction) * tickSpacing;
+            tickNext = ((tickNext / poolVars.tickSpacing) + direction) * poolVars.tickSpacing;
             sqrtPriceX96Current = sqrtPriceRatioNext;
         }
 
         return tokenAmt;
     }    
-}i
+}
