@@ -25,6 +25,7 @@ contract DepthTest is Test {
                                         uint256(79425985949584623951891398656),
                                         uint256(79623317895830908422001262592),
                                         uint256(80016521857016597127997947904)];
+                                        
         for (uint256 i=0; i<4; i++){
             depths[i] = depthsValues[i];
         }
@@ -45,7 +46,7 @@ contract DepthTest is Test {
         uint256[] memory depth_return = depth.calculateMultipleDepth(0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8, depths, token0, both);
         
         for (uint i=0; i<depth_return.length; i++) {
-            log_named_uint("Found token0 depth", depth_return[i]);
+            log_named_uint("Found token1 depth", depth_return[i]);
         }
 
         assertEq(true, true);
@@ -59,10 +60,16 @@ contract DepthTest is Test {
         // uint256 sqrtDepthX96 = 80016521857016597127997947904;
 
         uint256 depth_return = depth.calculateDepth(0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8, 80016521857016597127997947904, false, false);
-        log_named_uint("Current token0 depth", depth_return);
+        log_named_uint("Current token1 depth", depth_return);
 
-        depth_return = depth.calculateDepth(0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8, 80016521857016597127997947904, false, true);
+        // depth_return = depth.calculateDepth(0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8, 80016521857016597127997947904, false, true);
+        // log_named_uint("Current both token1 depth", depth_return);
+
+        depth_return = depth.calculateDepth(0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8, 80016521857016597127997947904, true, false);
         log_named_uint("Current both token0 depth", depth_return);
+
+        // depth_return = depth.calculateDepth(0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8, 80016521857016597127997947904, true, true);
+        // log_named_uint("Current both token0 depth", depth_return);
         
         assertEq(true, true);
     }
