@@ -151,4 +151,36 @@ contract CounterTest is Test {
 
         assertEq(depthReturnBaseToken0, depthReturnBaseToken1);
     }
+
+    function testMultipleToken1() public {
+        // .025%, .05%, 1%, 2%
+        uint256[] memory depths = new uint256[](4);
+        uint256[4] memory depthsValues = [uint256(79327135897655778240513441792),
+                                        uint256(79425985949584623951891398656),
+                                        uint256(79623317895830908422001262592),
+                                        uint256(80016521857016597127997947904)];
+                                        
+        for (uint256 i=0; i<4; i++){
+            depths[i] = depthsValues[i];
+        }
+
+        bool[] memory token0 = new bool[](4);
+        for (uint256 i=0; i<4; i++){
+            token0[i] = false;
+        }
+
+        bool[] memory both = new bool[](4);
+        for (uint256 i=0; i<4; i++){
+            both[i] = false;
+        }
+
+        uint256[] memory depthsMultiple = depth.calculateMultipleDepth(poolAddress, depths, token0, both, false);
+
+        uint256[] memory depthsSingles = new uint256[](4);
+        for (uint i=0; i<4; i++){
+            depthsSingles[i] = depth.calculateDepth(poolAddress, depths[i], false, false, false);
+        }
+
+        assertEq(depthsSingles, depthsMultiple);
+    }
 }

@@ -40,7 +40,7 @@ contract Depth {
         return _calculateDepth(sqrtDepthX96, token0, both, exact);
     }
 
-    function _calculateMultipleDepth(address poolAddress, uint256[] calldata sqrtDepthX96, 
+    function calculateMultipleDepth(address poolAddress, uint256[] calldata sqrtDepthX96, 
                                     bool[] calldata token0, bool[] calldata both, bool exact) public returns (uint256[] memory) {
         require((sqrtDepthX96.length == token0.length) &&
                  sqrtDepthX96.length == both.length, 'Different lengths provided');
