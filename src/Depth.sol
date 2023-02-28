@@ -6,14 +6,10 @@ import {FullMath} from 'v3-core/contracts/libraries/FullMath.sol';
 import {TickMath} from 'v3-core/contracts/libraries/TickMath.sol';
 import {SqrtPriceMath} from 'v3-core/contracts/libraries/SqrtPriceMath.sol';
 import {LiquidityMath}  from 'v3-core/contracts/libraries/LiquidityMath.sol';
-import "forge-std/console.sol";
 
 contract Depth {
-
-    // good practice to specify visibility of vars, these are default internal which is fine
     IUniswapV3Pool pool;
 
-    // pack vars in a struct to save gas, up to 256 bits
     struct PoolVariables {
         int24 tick;
         int24 tickSpacing;
@@ -25,8 +21,6 @@ contract Depth {
     bool token0Ind;
 
     function initializePoolVariables(address poolAddress) private {
-        // todo ask what this means
-        // also probably dont need pool as a storage var, just save whatever info u need from this pool ie looks like u use liquidity net
         pool = IUniswapV3Pool(address(poolAddress));
         
         int24 tick;
@@ -40,7 +34,7 @@ contract Depth {
             });
     }
 
-    function calculateDepth(address poolAddress, uint256 sqrtDepthX96, bool token0, bool bot, bool exact) public returns (uint256) {
+    function calculateDepth(address poolAddress, uint256 sqrtDepthX96, bool token0, bool both, bool exact) public returns (uint256) {
         initializePoolVariables(poolAddress);
 
         return _calculateDepth(sqrtDepthX96, token0, both, exact);
@@ -66,8 +60,6 @@ contract Depth {
         return returnArray;
     }
 
-    // consider initializing the pool variables in a separate function: initializePoolVariables(address pool)
-    // that way you could call calculateDepth multiple times in the same txn if you want different depths on the same pool
     function _calculateDepth(uint256 sqrtDepthX96, bool token0, bool both, bool exact) private returns (uint256) {
         uint256 returnAmt = 0;
 
@@ -84,15 +76,10 @@ contract Depth {
         return returnAmt;
     }
 
-    // can just send one bool into this function to determine direction
-    // calculateOneSide(bool zeroForOne, uint256 sqrtDepthX96)
     function calculateOneSide(uint256 sqrtDepthX96, bool upper, bool exact) private returns (uint256) {
         uint160 sqrtPriceRatioNext = sqrtPriceX96;
         uint160 sqrtPriceX96Current = sqrtPriceX96;
 
-        // todo ask q
-        // 1 << 96 is Q96
-        // overflow potential?
         uint128 sqrtPriceX96Tgt = upper ? uint128(FullMath.mulDiv(sqrtPriceX96, sqrtDepthX96, 1 << 96))
                                         : uint128(FullMath.mulDiv(sqrtPriceX96, 1 << 96, sqrtDepthX96));
         if (upper) { 
@@ -108,11 +95,8 @@ contract Depth {
             uint256 deflator = (sqrtDepthX96 * sqrtDepthX96 - (4 * (1 << 96)) - (1 << 192)) / (1 << 96);
             sqrtPriceX96Tgt = uint128(FullMath.mulDiv(sqrtPriceX96Tgt, ((1 << 192) - (deflator * deflator) / 2),  1 << 192));
         }
-
-        // todo ask q
-        // shift lower if calculating lower
-        // shift upper if calculating upper
-        // this is simulating floor and ceiling to tick spacing
+        
+        // this finds the floor for lower and ceil for upper of the current tick range
         int24 tickNext = upper ? ((poolVars.tick / poolVars.tickSpacing) + 1) * poolVars.tickSpacing
                                : (poolVars.tick / poolVars.tickSpacing) * poolVars.tickSpacing;
 
@@ -130,9 +114,7 @@ contract Depth {
                   : sqrtPriceRatioNext > sqrtPriceX96Tgt) {
 
             sqrtPriceRatioNext = TickMath.getSqrtRatioAtTick(tickNext);
-
-            // todo: also adjust this
-            // does this work? seems like youd just set it to target even if you have ticks to cross before target
+  
             // here we are checking if we blew past the target, and then if we did, we set it to the value we are searching for
             // then the loop above breaks
             if (upper ? sqrtPriceRatioNext < sqrtPriceX96Tgt
@@ -147,13 +129,11 @@ contract Depth {
             // kick out or add in the liquidiy that we are moving
             (, liquidityNet,,,,,,)  = pool.ticks(tickNext);
 
-            //todo q
             if (!upper) liquidityNet = -liquidityNet;
             liquiditySpot = LiquidityMath.addDelta(liquiditySpot, liquidityNet);
 
             // find what tick we will be shifting to
             // shift the range 
-            // todo q why is this different than the calculation above?
             tickNext = ((tickNext / poolVars.tickSpacing) + direction) * poolVars.tickSpacing;
             sqrtPriceX96Current = sqrtPriceRatioNext;
         }
