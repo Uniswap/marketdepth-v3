@@ -21,9 +21,10 @@ interface IDepth {
         int24 tickSpacing;
         uint128 liquidity;
         uint160 sqrtPriceX96;
+        address pool;
     }
 
-    function calculateDepths(address pool, uint256[] calldata sqrtDepthX96, DepthConfig[] calldata configs)
+    function calculateDepths(address pool, uint256[] memory sqrtDepthX96, DepthConfig[] memory configs)
         external
         returns (uint256[] memory amounts);
 }

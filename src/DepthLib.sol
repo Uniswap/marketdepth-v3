@@ -5,7 +5,7 @@ import {FullMath} from "v3-core/contracts/libraries/FullMath.sol";
 import {IDepth} from "./IDepth.sol";
 
 library DepthLib {
-    function setInitialPrices(IDepth.DepthConfig memory config, uint160 sqrtPriceX96, uint160 sqrtDepthX96)
+    function setInitialPrices(IDepth.DepthConfig memory config, uint160 sqrtPriceX96, uint256 sqrtDepthX96)
         internal
         returns (uint160 sqrtPriceX96Current, uint160 sqrtPriceX96Tgt)
     {

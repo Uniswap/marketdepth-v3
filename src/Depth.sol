@@ -15,17 +15,17 @@ contract Depth is IDepth {
     // error LengthMismatch();
 
     // todo input granular depth amounts
-    function calculateDepths(address pool, uint256[] calldata sqrtDepthX96, DepthConfig[] calldata configs)
+    function calculateDepths(address pool, uint256[] memory sqrtDepthX96, DepthConfig[] memory configs)
         external
-        returns (uint256[] amounts)
+        returns (uint256[] memory amounts)
     {
-        if (depths.length != configs.length) revert("LengthMismatch"); //revert LengthMismatch();
-        amounts = new uint256[](depths.length);
+        if (sqrtDepthX96.length != configs.length) revert("LengthMismatch"); //revert LengthMismatch();
+        amounts = new uint256[](sqrtDepthX96.length);
 
         IDepth.PoolVariables memory pool = initializePoolVariables(pool);
 
-        for (uint256 i = 0; i < depths.length; i++) {
-            amounts[i] = calculateDepthAmount(poolVar, config[i], sqrtDepthX96);
+        for (uint256 i = 0; i < sqrtDepthX96.length; i++) {
+            amounts[i] = calculateDepthAmount(pool, configs[i], sqrtDepthX96[i]);
         }
         return amounts;
     }
@@ -40,15 +40,15 @@ contract Depth is IDepth {
         uint160 sqrtPriceX96Current;
         uint160 sqrtPriceX96Tgt;
 
-        (sqrtPriceX96Current, sqrtPriceX96Tgt) = config.setInitialPrices(sqrtPriceX96, sqrtDepthX96);
+        (sqrtPriceX96Current, sqrtPriceX96Tgt) = config.setInitialPrices(poolVar.sqrtPriceX96, sqrtDepthX96);
 
         uint256 amount = 0;
         uint160 sqrtPriceX96Next;
-
+        uint128 liquidityGross;
         // calculates the lower bounds closest tick, then calculates the top of that tick-range
         int24 tickNext =
-            ((TickMath.getTickAtSqrtRatio(sqrtPriceX96Tgt) / poolVars.tickSpacing) + 1) * poolVars.tickSpacing;
-        uint128 liquiditySpot = pool.ticks(tickNext);
+            ((TickMath.getTickAtSqrtRatio(sqrtPriceX96Tgt) / poolVar.tickSpacing) + 1) * poolVar.tickSpacing;
+        (liquidityGross,,,,,,,) = IUniswapV3Pool(poolVar.pool).ticks(tickNext);
 
         while (sqrtPriceX96Current < sqrtPriceX96Tgt) {
             sqrtPriceX96Next = TickMath.getSqrtRatioAtTick(tickNext);
@@ -58,18 +58,20 @@ contract Depth is IDepth {
             }
 
             amount += config.token0
-                ? SqrtPriceMath.getAmount0Delta(sqrtPriceX96Current, sqrtPriceX96Next, liquiditySpot, false)
-                : SqrtPriceMath.getAmount1Delta(sqrtPriceX96Current, sqrtPriceX96Next, liquiditySpot, false);
+                ? SqrtPriceMath.getAmount0Delta(sqrtPriceX96Current, sqrtPriceX96Next, liquidityGross, false)
+                : SqrtPriceMath.getAmount1Delta(sqrtPriceX96Current, sqrtPriceX96Next, liquidityGross, false);
 
             // TODO: we don't need this updating after the last run of the contract
             // we could instead exit early
 
+            int128 liquidityNet;
+
             // update liquidity before next tick
-            (, liquidityNet,,,,,,) = pool.ticks(tickNext);
-            liquiditySpot = LiquidityMath.addDelta(liquiditySpot, liquidityNet);
+            (, liquidityNet,,,,,,) = IUniswapV3Pool(poolVar.pool).ticks(tickNext);
+            liquidityGross = LiquidityMath.addDelta(liquidityGross, liquidityNet);
 
             // update tick upward
-            tickNext = ((tickNext / poolVars.tickSpacing) + 1) * poolVars.tickSpacing;
+            tickNext = ((tickNext / poolVar.tickSpacing) + 1) * poolVar.tickSpacing;
 
             // update price
             sqrtPriceX96Current = sqrtPriceX96Next;
@@ -77,19 +79,20 @@ contract Depth is IDepth {
         return amount;
     }
 
-    function initializePoolVariables(address poolAddress) private returns (PoolVariables memory poolVars) {
-        IUniswapV3Pool memory pool = IUniswapV3Pool(address(poolAddress));
+    function initializePoolVariables(address poolAddress) private returns (PoolVariables memory poolVar) {
+        IUniswapV3Pool pool = IUniswapV3Pool(address(poolAddress));
 
         int24 tick;
         uint160 sqrtPriceX96;
         // load data into global memory
         (sqrtPriceX96, tick,,,,,) = pool.slot0(); // sload, sstore
 
-        poolVars = PoolVariables({
+        poolVar = PoolVariables({
             tick: tick,
             tickSpacing: pool.tickSpacing(),
             liquidity: pool.liquidity(),
-            sqrtPriceX96: sqrtPriceX96
+            sqrtPriceX96: sqrtPriceX96,
+            pool: poolAddress
         });
     }
 }
