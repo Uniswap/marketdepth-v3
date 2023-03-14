@@ -6,47 +6,31 @@ import {FullMath} from "v3-core/contracts/libraries/FullMath.sol";
 import {TickMath} from "v3-core/contracts/libraries/TickMath.sol";
 import {SqrtPriceMath} from "v3-core/contracts/libraries/SqrtPriceMath.sol";
 import {LiquidityMath} from "v3-core/contracts/libraries/LiquidityMath.sol";
+import {DepthLib} from "./DepthLib.sol";
+import {IDepth} from "./IDepth.sol";
 
-contract Depth {
-    using DepthLib for DepthConfig;
+contract Depth is IDepth {
+    using DepthLib for IDepth.DepthConfig;
 
     // error LengthMismatch();
-    struct PoolVariables {
-        int24 tick;
-        int24 tickSpacing;
-        uint128 liquidity;
-        uint160 sqrtPriceX96;
-    }
 
-    struct DepthConfig {
-        // set to true if you want the entire depth range
-        bool bothSides;
-        // set to 0 for amount in token0, set to 1 for amount in token1
-        bool token0;
-        // if bothSides == false, set the direction of the depth calculation
-        // if false, will do lower range, if true does upper range
-        bool upper;
-        // ?? for the precise calculation.. tbh i think we should just always calculate exact?
-        bool exact;
-    }
-
-    // todo input granular depth amounts 
+    // todo input granular depth amounts
     function calculateDepths(address pool, uint256[] calldata sqrtDepthX96, DepthConfig[] calldata configs)
         external
         returns (uint256[] amounts)
     {
-        if (depths.length != configs.length) revert("LengthMismatch");//revert LengthMismatch();
+        if (depths.length != configs.length) revert("LengthMismatch"); //revert LengthMismatch();
         amounts = new uint256[](depths.length);
 
-        PoolVariables memory pool = initializePoolVariables(pool);
+        IDepth.PoolVariables memory pool = initializePoolVariables(pool);
 
         for (uint256 i = 0; i < depths.length; i++) {
-            amounts[i] = calculateDepthAmount(poolVar, config[i]);
+            amounts[i] = calculateDepthAmount(poolVar, config[i], sqrtDepthX96);
         }
         return amounts;
     }
 
-    function calculateDepthAmount(PoolVariables memory poolVar, DepthConfig memory config)
+    function calculateDepthAmount(PoolVariables memory poolVar, DepthConfig memory config, uint256 sqrtDepthX96)
         internal
         returns (uint256 amount)
     {
@@ -56,13 +40,14 @@ contract Depth {
         uint160 sqrtPriceX96Current;
         uint160 sqrtPriceX96Tgt;
 
-        (sqrtPriceX96Current, sqrtPriceX96Tgt) = config.setInitialPrices(sqrtPriceX96);
+        (sqrtPriceX96Current, sqrtPriceX96Tgt) = config.setInitialPrices(sqrtPriceX96, sqrtDepthX96);
 
         uint256 amount = 0;
         uint160 sqrtPriceX96Next;
-        
+
         // calculates the lower bounds closest tick, then calculates the top of that tick-range
-        int24 tickNext = ((TickMath.getTickAtSqrtRatio(sqrtPriceX96Tgt) / poolVars.tickSpacing) + 1) * poolVars.tickSpacing;
+        int24 tickNext =
+            ((TickMath.getTickAtSqrtRatio(sqrtPriceX96Tgt) / poolVars.tickSpacing) + 1) * poolVars.tickSpacing;
         uint128 liquiditySpot = pool.ticks(tickNext);
 
         while (sqrtPriceX96Current < sqrtPriceX96Tgt) {
@@ -70,7 +55,6 @@ contract Depth {
             if (sqrtPriceX96Next > sqrtPriceX96Tgt) {
                 // handles when CURRENT < TARGET but NEXT > TARGET
                 sqrtPriceX96Next = sqrtPriceX96Tgt;
-                
             }
 
             amount += config.token0
@@ -101,7 +85,11 @@ contract Depth {
         // load data into global memory
         (sqrtPriceX96, tick,,,,,) = pool.slot0(); // sload, sstore
 
-        poolVars = PoolVariables({tick: tick, tickSpacing: pool.tickSpacing(), liquidity: pool.liquidity(), sqrtPriceX96: sqrtPriceX96});
+        poolVars = PoolVariables({
+            tick: tick,
+            tickSpacing: pool.tickSpacing(),
+            liquidity: pool.liquidity(),
+            sqrtPriceX96: sqrtPriceX96
+        });
     }
-
 }

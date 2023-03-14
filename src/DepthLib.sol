@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.7.6;
 
-import {DepthConfig} from "./Depth.sol";
+import {FullMath} from "v3-core/contracts/libraries/FullMath.sol";
+import {IDepth} from "./IDepth.sol";
 
 library DepthLib {
-    function setInitialPrices(DepthConfig memory config, uint160 sqrtPriceX96)
+    function setInitialPrices(IDepth.DepthConfig memory config, uint160 sqrtPriceX96, uint160 sqrtDepthX96)
         internal
         returns (uint160 sqrtPriceX96Current, uint160 sqrtPriceX96Tgt)
     {
