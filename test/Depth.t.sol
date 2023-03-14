@@ -30,7 +30,7 @@ contract CounterTest is Test {
     Depth public depth;
 
     // this is the lower limit for floating point arithmetic
-    uint256 toleranceExact = 1e10;
+    uint256 toleranceTrue = 1e10;
     // we approximate the  difference so is it not as accurate. this equals 10 bps
     uint256 toleranceApprox = 1e13;
     uint256 offchainCalculation;
@@ -43,6 +43,7 @@ contract CounterTest is Test {
 
     function createV3() public {
         uint256 MAX_INT = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff;
+        uint128 liquidity = 0;
         v3Factory = IUniswapV3Factory(0x1F98431c8aD98523631AE4a59f267346ea31F984);
         nftPosManager = INonfungiblePositionManager(nftPosManagerAddress);
 
@@ -69,9 +70,21 @@ contract CounterTest is Test {
             recipient: me,
             deadline: block.timestamp + 100
         });
-
+        
+        // createa a position
         // liquidity = 4050408317414413260938526
-        nftPosManager.mint(mintParams);
+        (,liquidity,,) = nftPosManager.mint(mintParams);
+        console.log('Liquidity1');
+        console.log(liquidity);
+
+
+        // create a second position
+        mintParams.tickLower = -100;
+        mintParams.tickUpper = 100;        
+        // liquidity = 20051041647900280328782201
+        (,liquidity,,) =  nftPosManager.mint(mintParams);
+        console.log('Liquidity2');
+        console.log(liquidity);
     }      
 
     function setUp() public {
@@ -84,7 +97,22 @@ contract CounterTest is Test {
         createV3();
     }
 
-        function testDepths() public {
+    function testDepths() public {
+        // testing against theoretical depth calculations from off-chain
+        // liquidityLow = 4050408317414413260938526 or liquidity from ticks [-500, -100] U [100, 500]
+        // liquidityHigh = 24101449965314693589720727 or liquidity from ticks [-100, 100]
+        //
+        // .025% depth = 30070442109295608725504
+        // 30070442109295608725504 = (1 - sqrt(1 / (1 + .0025))) * liquidityHigh
+        //
+        // .05% depth = 60028611182300957245440
+        // 60028611182300957245440 = (1 - sqrt(1 / (1 + .005))) * liquidityHigh)
+        //
+        // 1% depth = 119610911841320356020224
+        // 119610911841320356020224 = (1 - sqrt(1 / (1 + .01))) * liquidityHigh
+
+        // 2% depth = 139906473874235768963072
+        // 139906473874235768963072 = (1 - sqrt(1.0001 ** -100)) * liquidityHigh + ((sqrt(1.0001 ** -100) - sqrt(1 / (1 + .02)))) * liquidityLow
         // .025%, .05%, 1%, 2%
         uint256[] memory depths = new uint256[](4);
         uint256[4] memory depthsValues = [uint256(79327135897655778240513441792),
@@ -112,20 +140,29 @@ contract CounterTest is Test {
             console.log(depthsMultiple[i]);
         }
 
-        assertEq(true, true);
+        uint256[4] memory offchainCalculations = [uint256(30070442109295608725504), 
+                                                  uint256(60028611182300957245440), 
+                                                  uint256(119610911841320356020224), 
+                                                  uint256(139906473874235768963072)];
+        
+        bool truth = true;
+        for (uint256 i=0; i<offchainCalculations.length; i++){
+            truth && (evalulatePct(depthsMultiple[i], offchainCalculations[i]) < toleranceTrue);
+        }
+
+        assertEq(pctDiff < toleranceApprox, true);
     }
 
-
-//     function testBaseLower() public {
-//         uint256 depth_return = depth.calculateDepth(poolAddress, 80016521857016597127997947904, false, false, false);
-//         console.log(depth_return);
+    // function testBaseLower() public {
+    //     uint256 depth_return = depth.calculateDepth(poolAddress, 80016521857016597127997947904, false, false, false);
+    //     console.log(depth_return);
         
-//         // liquidity * (1 - sqrt(1 / (1 + .02))) = 39906473874246514769920
-//         offchainCalculation = 39906473874246514769920;
-//         pctDiff = evalulatePct(offchainCalculation, depth_return);
+    //     // (1 - sqrt(1.0001 ** -100)) * liqHigh + ((sqrt(1.0001 ** -100) - sqrt(1 / (1 + .02)))) * liqLow
+    //     offchainCalculation = 39906473874246514769920;
+    //     pctDiff = evalulatePct(offchainCalculation, depth_return);
 
-//         assertEq(pctDiff < toleranceExact, true);
-//     }
+    //     assertEq(pctDiff < toleranceExact, true);
+    // }
 
 //     function testExactLower() public {
 //         uint256 depth_return = depth.calculateDepth(poolAddress, 80016521857016597127997947904, false, false, true);
