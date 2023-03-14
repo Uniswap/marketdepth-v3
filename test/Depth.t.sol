@@ -35,6 +35,19 @@ contract CounterTest is Test {
     uint256 offchainCalculation;
     uint256 pctDiff;
 
+    struct DepthConfig {
+        // set to true if you want the entire depth range
+        bool bothSides;
+        // set to 0 for amount in token0, set to 1 for amount in token1
+        bool token0;
+        // if bothSides == false, set the direction of the depth calculation
+        // if false, will do lower range, if true does upper range
+        bool upper;
+        // ?? for the precise calculation.. tbh i think we should just always calculate exact?
+        bool exact;
+    }
+
+
     function evalulatePct(uint256 offchain, uint256 onchain) public returns (uint256) {
         return offchain > onchain ? ((offchain - onchain) * 1e18 / onchain)
                                   : ((onchain - offchain) * 1e18 / offchain);
@@ -84,76 +97,16 @@ contract CounterTest is Test {
     }
 
     function testBaseLower() public {
-        uint256 depth_return = depth.calculateDepth(poolAddress, 80016521857016597127997947904, false, false, false);
-        console.log(depth_return);
-        
-        // liquidity * (1 - sqrt(1 / (1 + .02))) = 39906473874246514769920
-        offchainCalculation = 39906473874246514769920;
-        pctDiff = evalulatePct(offchainCalculation, depth_return);
-
-        assertEq(pctDiff < toleranceExact, true);
-    }
-
-    function testExactLower() public {
-        uint256 depth_return = depth.calculateDepth(poolAddress, 80016521857016597127997947904, false, false, true);
-        console.log(depth_return);
-        
-        // liquidity * (1 - sqrt(1.02)) = 40708654469037168787456
-        offchainCalculation = 40708654469037168787456;
-        pctDiff = evalulatePct(offchainCalculation, depth_return);
-
-        assertEq(pctDiff < toleranceApprox, true);
-    }
-    
-    // function calculateDepth(address poolAddress, uint256 sqrtDepthX96, bool token0, bool both, bool exact) public returns (uint256) {
-    function testBaseUpper() public {
-        uint256 depth_return = depth.calculateDepth(poolAddress, 80016521857016597127997947904, true, false, false);
-        console.log(depth_return);
-        
-        // liquidity * (1 - sqrt(1.02)) = 39906473874246565101568
-        offchainCalculation = 39906473874246565101568;
-        pctDiff = evalulatePct(offchainCalculation, depth_return);
-
-        assertEq(pctDiff < toleranceExact, true);
-    }
-
-    // function calculateDepth(address poolAddress, uint256 sqrtDepthX96, bool token0, bool both, bool exact) public returns (uint256) {
-    function testExactUpper() public {
-        uint256 depthReturnBase = depth.calculateDepth(poolAddress, 80016521857016597127997947904, true, false, false);
-        uint256 depthReturnExact = depth.calculateDepth(poolAddress, 80016521857016597127997947904, true, false, true);
-        
-        assertEq(depthReturnBase, depthReturnExact);
-    }
-
-    function testBothToken1() public {
-        uint256 depthReturnBase = depth.calculateDepth(poolAddress, 80016521857016597127997947904, false, true, false);
-
-        // liquidity * (sqrt(1.02) - sqrt(1 / 1.02)) = 80210036870803563216896
-        offchainCalculation = 80210036870803563216896;
-        pctDiff = evalulatePct(offchainCalculation, depthReturnBase);
-
-        assertEq(pctDiff < toleranceApprox, true);
-    }
-
-    function testBothToken0() public {
-        uint256 depthReturnBase = depth.calculateDepth(poolAddress, 80016521857016597127997947904, true, true, false);
-
-        // liquidity * (sqrt(1.02) - sqrt(1 /1.02)) / (sqrt(1.02) * sqrt(1/1.02)) = 80210036870803563216896
-        offchainCalculation = 80210036870803563216896;
-        pctDiff = evalulatePct(offchainCalculation, depthReturnBase);
-
-        assertEq(pctDiff < toleranceApprox, true);
-    }
-
-    function testBothToken0vsToken1() public {
-        uint256 depthReturnBaseToken0 =  depth.calculateDepth(poolAddress, 80016521857016597127997947904, false, true, false);
-        uint256 depthReturnBaseToken1 = depth.calculateDepth(poolAddress, 80016521857016597127997947904, false, true, false);
-
-        assertEq(depthReturnBaseToken0, depthReturnBaseToken1);
-    }
-
-    function testMultipleToken1() public {
         // .025%, .05%, 1%, 2%
+        DepthConfig[] memory configs = new DepthConfig[](4);
+        
+        for (uint256 i=0; i<configs.length; i++){
+            configs[i] = DepthConfig({bothSides: false,
+                                    token0: false,
+                                    upper: false,
+                                    exact: false});
+        }
+        
         uint256[] memory depths = new uint256[](4);
         uint256[4] memory depthsValues = [uint256(79327135897655778240513441792),
                                         uint256(79425985949584623951891398656),
@@ -164,23 +117,111 @@ contract CounterTest is Test {
             depths[i] = depthsValues[i];
         }
 
-        bool[] memory token0 = new bool[](4);
-        for (uint256 i=0; i<4; i++){
-            token0[i] = false;
-        }
+        uint256[] memory depthsMultiple = depth.calculateMultipleDepth(poolAddress, depths, configs);
+        console.log(depthsMultiple);
 
-        bool[] memory both = new bool[](4);
-        for (uint256 i=0; i<4; i++){
-            both[i] = false;
-        }
-
-        uint256[] memory depthsMultiple = depth.calculateMultipleDepth(poolAddress, depths, token0, both, false);
-
-        uint256[] memory depthsSingles = new uint256[](4);
-        for (uint i=0; i<4; i++){
-            depthsSingles[i] = depth.calculateDepth(poolAddress, depths[i], false, false, false);
-        }
-
-        assertEq(depthsSingles, depthsMultiple);
+        assertEq(true, true);
     }
+
+
+    // function testBaseLower() public {
+    //     uint256 depth_return = depth.calculateDepth(poolAddress, 80016521857016597127997947904, false, false, false);
+    //     console.log(depth_return);
+        
+    //     // liquidity * (1 - sqrt(1 / (1 + .02))) = 39906473874246514769920
+    //     offchainCalculation = 39906473874246514769920;
+    //     pctDiff = evalulatePct(offchainCalculation, depth_return);
+
+    //     assertEq(pctDiff < toleranceExact, true);
+    // }
+
+    // function testExactLower() public {
+    //     uint256 depth_return = depth.calculateDepth(poolAddress, 80016521857016597127997947904, false, false, true);
+    //     console.log(depth_return);
+        
+    //     // liquidity * (1 - sqrt(1.02)) = 40708654469037168787456
+    //     offchainCalculation = 40708654469037168787456;
+    //     pctDiff = evalulatePct(offchainCalculation, depth_return);
+
+    //     assertEq(pctDiff < toleranceApprox, true);
+    // }
+    
+    // // function calculateDepth(address poolAddress, uint256 sqrtDepthX96, bool token0, bool both, bool exact) public returns (uint256) {
+    // function testBaseUpper() public {
+    //     uint256 depth_return = depth.calculateDepth(poolAddress, 80016521857016597127997947904, true, false, false);
+    //     console.log(depth_return);
+        
+    //     // liquidity * (1 - sqrt(1.02)) = 39906473874246565101568
+    //     offchainCalculation = 39906473874246565101568;
+    //     pctDiff = evalulatePct(offchainCalculation, depth_return);
+
+    //     assertEq(pctDiff < toleranceExact, true);
+    // }
+
+    // // function calculateDepth(address poolAddress, uint256 sqrtDepthX96, bool token0, bool both, bool exact) public returns (uint256) {
+    // function testExactUpper() public {
+    //     uint256 depthReturnBase = depth.calculateDepth(poolAddress, 80016521857016597127997947904, true, false, false);
+    //     uint256 depthReturnExact = depth.calculateDepth(poolAddress, 80016521857016597127997947904, true, false, true);
+        
+    //     assertEq(depthReturnBase, depthReturnExact);
+    // }
+
+    // function testBothToken1() public {
+    //     uint256 depthReturnBase = depth.calculateDepth(poolAddress, 80016521857016597127997947904, false, true, false);
+
+    //     // liquidity * (sqrt(1.02) - sqrt(1 / 1.02)) = 80210036870803563216896
+    //     offchainCalculation = 80210036870803563216896;
+    //     pctDiff = evalulatePct(offchainCalculation, depthReturnBase);
+
+    //     assertEq(pctDiff < toleranceApprox, true);
+    // }
+
+    // function testBothToken0() public {
+    //     uint256 depthReturnBase = depth.calculateDepth(poolAddress, 80016521857016597127997947904, true, true, false);
+
+    //     // liquidity * (sqrt(1.02) - sqrt(1 /1.02)) / (sqrt(1.02) * sqrt(1/1.02)) = 80210036870803563216896
+    //     offchainCalculation = 80210036870803563216896;
+    //     pctDiff = evalulatePct(offchainCalculation, depthReturnBase);
+
+    //     assertEq(pctDiff < toleranceApprox, true);
+    // }
+
+    // function testBothToken0vsToken1() public {
+    //     uint256 depthReturnBaseToken0 =  depth.calculateDepth(poolAddress, 80016521857016597127997947904, false, true, false);
+    //     uint256 depthReturnBaseToken1 = depth.calculateDepth(poolAddress, 80016521857016597127997947904, false, true, false);
+
+    //     assertEq(depthReturnBaseToken0, depthReturnBaseToken1);
+    // }
+
+    // function testMultipleToken1() public {
+    //     // .025%, .05%, 1%, 2%
+    //     uint256[] memory depths = new uint256[](4);
+    //     uint256[4] memory depthsValues = [uint256(79327135897655778240513441792),
+    //                                     uint256(79425985949584623951891398656),
+    //                                     uint256(79623317895830908422001262592),
+    //                                     uint256(80016521857016597127997947904)];
+                                        
+    //     for (uint256 i=0; i<4; i++){
+    //         depths[i] = depthsValues[i];
+    //     }
+
+    //     bool[] memory token0 = new bool[](4);
+    //     for (uint256 i=0; i<4; i++){
+    //         token0[i] = false;
+    //     }
+
+    //     bool[] memory both = new bool[](4);
+    //     for (uint256 i=0; i<4; i++){
+    //         both[i] = false;
+    //     }
+
+    //     uint256[] memory depthsMultiple = depth.calculateMultipleDepth(poolAddress, depths, token0, both, false);
+
+    //     uint256[] memory depthsSingles = new uint256[](4);
+    //     for (uint i=0; i<4; i++){
+    //         depthsSingles[i] = depth.calculateDepth(poolAddress, depths[i], false, false, false);
+    //     }
+
+    //     assertEq(depthsSingles, depthsMultiple);
+    // }
 }

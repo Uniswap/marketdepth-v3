@@ -10,7 +10,7 @@ import {LiquidityMath} from "v3-core/contracts/libraries/LiquidityMath.sol";
 contract Depth {
     using DepthLib for DepthConfig;
 
-    error LengthMismatch();
+    // error LengthMismatch();
     struct PoolVariables {
         int24 tick;
         int24 tickSpacing;
@@ -35,7 +35,7 @@ contract Depth {
         external
         returns (uint256[] amounts)
     {
-        if (depths.length != configs.length) revert LengthMismatch();
+        if (depths.length != configs.length) revert("LengthMismatch");//revert LengthMismatch();
         amounts = new uint256[](depths.length);
 
         PoolVariables memory pool = initializePoolVariables(pool);
@@ -54,34 +54,37 @@ contract Depth {
         // idea: why dont we just always calculate up?
         // why are these not the same uint?
         uint160 sqrtPriceX96Current;
-        uint128 sqrtPriceX96Tgt;
+        uint160 sqrtPriceX96Tgt;
 
         (sqrtPriceX96Current, sqrtPriceX96Tgt) = config.setInitialPrices(sqrtPriceX96);
 
         uint256 amount = 0;
         uint160 sqrtPriceX96Next;
-        // this might be wrong actually...
-        int24 tickNext = ((poolVars.tick / poolVars.tickSpacing) + 1) * poolVars.tickSpacing;
-        uint128 liquiditySpot = poolVars.liquidity;
+        
+        // calculates the lower bounds closest tick, then calculates the top of that tick-range
+        int24 tickNext = ((TickMath.getTickAtSqrtRatio(sqrtPriceX96Tgt) / poolVars.tickSpacing) + 1) * poolVars.tickSpacing;
+        uint128 liquiditySpot = pool.ticks(tickNext);
 
         while (sqrtPriceX96Current < sqrtPriceX96Tgt) {
-            // skipping exact rn bc idk what that is
-
             sqrtPriceX96Next = TickMath.getSqrtRatioAtTick(tickNext);
             if (sqrtPriceX96Next > sqrtPriceX96Tgt) {
                 // handles when CURRENT < TARGET but NEXT > TARGET
                 sqrtPriceX96Next = sqrtPriceX96Tgt;
+                
             }
 
             amount += config.token0
                 ? SqrtPriceMath.getAmount0Delta(sqrtPriceX96Current, sqrtPriceX96Next, liquiditySpot, false)
                 : SqrtPriceMath.getAmount1Delta(sqrtPriceX96Current, sqrtPriceX96Next, liquiditySpot, false);
 
+            // TODO: we don't need this updating after the last run of the contract
+            // we could instead exit early
+
             // update liquidity before next tick
             (, liquidityNet,,,,,,) = pool.ticks(tickNext);
             liquiditySpot = LiquidityMath.addDelta(liquiditySpot, liquidityNet);
 
-            // update tick
+            // update tick upward
             tickNext = ((tickNext / poolVars.tickSpacing) + 1) * poolVars.tickSpacing;
 
             // update price
@@ -98,7 +101,7 @@ contract Depth {
         // load data into global memory
         (sqrtPriceX96, tick,,,,,) = pool.slot0(); // sload, sstore
 
-        poolVars = PoolVariables({tick: tick, tickSpacing: pool.tickSpacing(), liquidity: pool.liquidity(), sqrtPriceX96});
+        poolVars = PoolVariables({tick: tick, tickSpacing: pool.tickSpacing(), liquidity: pool.liquidity(), sqrtPriceX96: sqrtPriceX96});
     }
 
 }
