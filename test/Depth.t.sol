@@ -74,17 +74,12 @@ contract CounterTest is Test {
         // createa a position
         // liquidity = 4050408317414413260938526
         (,liquidity,,) = nftPosManager.mint(mintParams);
-        console.log('Liquidity1');
-        console.log(liquidity);
-
 
         // create a second position
         mintParams.tickLower = -100;
         mintParams.tickUpper = 100;        
         // liquidity = 20051041647900280328782201
         (,liquidity,,) =  nftPosManager.mint(mintParams);
-        console.log('Liquidity2');
-        console.log(liquidity);
     }      
 
     function setUp() public {
@@ -97,7 +92,7 @@ contract CounterTest is Test {
         createV3();
     }
 
-    function testDepths() public {
+    function testDepthsToken0() public {
         // testing against theoretical depth calculations from off-chain
         // liquidityLow = 4050408317414413260938526 or liquidity from ticks [-500, -100] U [100, 500]
         // liquidityHigh = 24101449965314693589720727 or liquidity from ticks [-100, 100]
@@ -135,11 +130,6 @@ contract CounterTest is Test {
 
 
         uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
-
-        for (uint256 i=0; i<depthsMultiple.length; i++){
-            console.log(depthsMultiple[i]);
-        }
-
         uint256[4] memory offchainCalculations = [uint256(30070442109295608725504), 
                                                   uint256(60028611182300957245440), 
                                                   uint256(119610911841320356020224), 
@@ -150,7 +140,7 @@ contract CounterTest is Test {
             truth && (evalulatePct(depthsMultiple[i], offchainCalculations[i]) < toleranceTrue);
         }
 
-        assertEq(pctDiff < toleranceApprox, true);
+        assertEq(truth, true);
     }
 
     // function testBaseLower() public {
