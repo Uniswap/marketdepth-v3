@@ -42,8 +42,6 @@ contract CounterTest is Test {
 
     function createV3() public {
         uint256 MAX_INT = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff;
-        uint128 liquidity = 0;
-        uint256 tokenId = 0;
         v3Factory = IUniswapV3Factory(0x1F98431c8aD98523631AE4a59f267346ea31F984);
         nftPosManager = INonfungiblePositionManager(nftPosManagerAddress);
 
@@ -431,4 +429,47 @@ contract CounterTest is Test {
 
         assertEq(truth, true);
     }
+
+    function testLengthMismatchReversion() public {
+         uint256[] memory depths = new uint256[](1);
+        uint256[1] memory depthsValues = [uint256(80016521857016597127997947904)];
+                                        
+        for (uint256 i=0; i<depthsValues.length; i++){
+            depths[i] = depthsValues[i];
+        }
+
+        IDepth.DepthConfig[] memory config = new IDepth.DepthConfig[](2);
+        for (uint256 i=0; i<config.length; i++){
+            config[i] = IDepth.DepthConfig({
+                                            bothSides: false,
+                                            token0: false,
+                                            exact: false
+                                        });
+        }
+
+        vm.expectRevert("LengthMismatch");
+        uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
+    }
+
+    function testExceededMaxDepthReversion() public {
+         uint256[] memory depths = new uint256[](1);
+        uint256[1] memory depthsValues = [uint256(112045541949572287496682733568)];
+                                        
+        for (uint256 i=0; i<depthsValues.length; i++){
+            depths[i] = depthsValues[i];
+        }
+
+        IDepth.DepthConfig[] memory config = new IDepth.DepthConfig[](1);
+        for (uint256 i=0; i<config.length; i++){
+            config[i] = IDepth.DepthConfig({
+                                            bothSides: true,
+                                            token0: true,
+                                            exact: true
+                                        });
+        }
+
+        vm.expectRevert("ExceededMaxDepth");
+        uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
+    }
+
 }

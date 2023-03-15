@@ -58,14 +58,14 @@ contract Depth is IDepth {
         uint160 sqrtPriceX96Tgt = upper ? uint160(FullMath.mulDiv(pool.sqrtPriceX96, sqrtDepthX96, 1 << 96))
                                         : uint160(FullMath.mulDiv(pool.sqrtPriceX96, 1 << 96, sqrtDepthX96));
         if (upper) { 
-            require(pool.sqrtPriceX96 <= sqrtPriceX96Tgt);
+            require(pool.sqrtPriceX96 <= sqrtPriceX96Tgt, "UpperboundOverflow");
         } else if (config.exact) {
             // we want to calculate deflator = (1-p)^2 / 2 to approximate (1-p) instead of 1/(1+p)
             // because 1 / (1 + p) * price * (1-deflator) = (1-p) * price
             // this is because of the taylor series expansion of these values
             // however we need to keep everything in integers, so we cannot directly calculate sqrt(1-p)
             // 112045541949572287496682733568 = sqrt(2) * 2^96, which breaks this code/deflation
-            require(sqrtDepthX96 < 112045541949572287496682733568);
+            require(sqrtDepthX96 < 112045541949572287496682733568, "ExceededMaxDepth");
 
             uint256 deflator = (sqrtDepthX96 * sqrtDepthX96 - (4 * (1 << 96)) - (1 << 192)) / (1 << 96);
             sqrtPriceX96Tgt = uint160(FullMath.mulDiv(sqrtPriceX96Tgt, ((1 << 192) - (deflator * deflator) / 2),  1 << 192));
