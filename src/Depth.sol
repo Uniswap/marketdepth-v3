@@ -16,7 +16,7 @@ contract Depth is IDepth {
         override
         returns (uint256[] memory amounts)
     {
-        if (sqrtDepthX96.length != configs.length) revert("LengthMismatch"); //revert LengthMismatch();
+        require(sqrtDepthX96.length == configs.length, "LengthMismatch"); 
         amounts = new uint256[](sqrtDepthX96.length);
 
         IDepth.PoolVariables memory pool = initializePoolVariables(pool);
@@ -51,6 +51,8 @@ contract Depth is IDepth {
         uint160 sqrtPriceX96Current = pool.sqrtPriceX96;
         bool upper = config.token0;
 
+        // we pull the direction originally from the token, but when we want to calculate both sides, we invert the direction
+        // while also keeping the token the same
         if (inversion) {
             upper = !upper;
         }
@@ -124,7 +126,6 @@ contract Depth is IDepth {
 
         int24 tick;
         uint160 sqrtPriceX96;
-        // load data into global memory
         (sqrtPriceX96, tick,,,,,) = pool.slot0(); // sload, sstore
 
         poolVar = IDepth.PoolVariables({
