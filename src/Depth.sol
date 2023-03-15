@@ -37,7 +37,7 @@ contract Depth is IDepth {
             returnAmt+=calculateOneSide(pool, config, sqrtDepthX96, true);
             returnAmt+=calculateOneSide(pool, config, sqrtDepthX96, false);
         } else {
-            returnAmt+=calculateOneSide(pool, config, sqrtDepthX96, true);
+            returnAmt+=calculateOneSide(pool, config, sqrtDepthX96, false);
         }
        
         return returnAmt;
@@ -49,13 +49,17 @@ contract Depth is IDepth {
     {
         uint160 sqrtPriceRatioNext = pool.sqrtPriceX96;
         uint160 sqrtPriceX96Current = pool.sqrtPriceX96;
-        bool upper = config.token0 && inversion;
+        bool upper = config.token0;
+
+        if (inversion) {
+            upper = !upper;
+        }
 
         uint160 sqrtPriceX96Tgt = upper ? uint160(FullMath.mulDiv(pool.sqrtPriceX96, sqrtDepthX96, 1 << 96))
                                         : uint160(FullMath.mulDiv(pool.sqrtPriceX96, 1 << 96, sqrtDepthX96));
         if (upper) { 
             require(pool.sqrtPriceX96 <= sqrtPriceX96Tgt);
-        } else  if (config.exact) {
+        } else if (config.exact) {
             // we want to calculate deflator = (1-p)^2 / 2 to approximate (1-p) instead of 1/(1+p)
             // because 1 / (1 + p) * price * (1-deflator) = (1-p) * price
             // this is because of the taylor series expansion of these values
