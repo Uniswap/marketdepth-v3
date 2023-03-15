@@ -32,7 +32,6 @@ contract CounterTest is Test {
     uint256 toleranceTrue = 1e10;
     // we approximate the  difference so is it not as accurate. this equals 10 bps
     uint256 toleranceApprox = 1e13;
-    uint256 offchainCalculation;
     uint256 pctDiff;
 
     function evalulatePct(uint256 offchain, uint256 onchain) public returns (uint256) {
