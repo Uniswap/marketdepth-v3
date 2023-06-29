@@ -92,7 +92,7 @@ contract Depth is IDepth {
                 uint256 deflator = (sqrtDepthX96 * sqrtDepthX96 - (4 * (1 << 96)) - (1 << 192)) / (1 << 96);
                 sqrtPriceX96Tgt =
                     uint160(FullMath.mulDiv(sqrtPriceX96Tgt, ((1 << 192) - (deflator * deflator) / 2), 1 << 192));
-            } 
+            }
             direction = int24(-1);
         }
 
