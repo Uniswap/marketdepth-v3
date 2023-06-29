@@ -36,7 +36,7 @@ contract Depth is IDepth {
     {
         bool initialized;
 
-        if (lte) {
+        if (!lte) {
             (tickNext, initialized) =
                 PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick - 1, !upper);
         } else {
@@ -80,6 +80,7 @@ contract Depth is IDepth {
             sqrtPriceX96Tgt = uint160(FullMath.mulDiv(poolVariables.sqrtPriceX96, sqrtDepthX96, 1 << 96));
             require(poolVariables.sqrtPriceX96 <= sqrtPriceX96Tgt, "UpperboundOverflow");
         } else {
+            sqrtPriceX96Tgt = uint160(FullMath.mulDiv(poolVariables.sqrtPriceX96, 1 << 96, sqrtDepthX96));
             if (config.exact) {
                 // we want to calculate deflator = (1-p)^2 / 2 to approximate (1-p) instead of 1/(1+p)
                 // because 1 / (1 + p) * price * (1-deflator) = (1-p) * price
@@ -91,13 +92,11 @@ contract Depth is IDepth {
                 uint256 deflator = (sqrtDepthX96 * sqrtDepthX96 - (4 * (1 << 96)) - (1 << 192)) / (1 << 96);
                 sqrtPriceX96Tgt =
                     uint160(FullMath.mulDiv(sqrtPriceX96Tgt, ((1 << 192) - (deflator * deflator) / 2), 1 << 192));
-            } else {
-                sqrtPriceX96Tgt = uint160(FullMath.mulDiv(poolVariables.sqrtPriceX96, 1 << 96, sqrtDepthX96));
-            }
+            } 
             direction = int24(-1);
         }
 
-        int24 tickNext = _findNextTick(poolVariables, poolVariables.tick, upper, false);
+        int24 tickNext = _findNextTick(poolVariables, poolVariables.tick, upper, true);
 
         uint160 sqrtPriceX96Current = poolVariables.sqrtPriceX96;
         uint128 liquiditySpot = poolVariables.liquidity;
@@ -136,7 +135,7 @@ contract Depth is IDepth {
 
             // find what tick we will be shifting to
             // shift the range
-            tickNext = _findNextTick(poolVariables, tickNext, upper, true);
+            tickNext = _findNextTick(poolVariables, tickNext, upper, false);
             sqrtPriceX96Current = sqrtPriceRatioNext;
         }
         return tokenAmt;
