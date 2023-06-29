@@ -5,12 +5,18 @@ pragma abicoder v2;
 /// @title IDepth
 /// @notice Interface for calculating the market depth of a v3 pool.
 interface IDepth {
+    // The side of the range you want the depth for, either lower, upper, or depth on both sides.
+    enum Side {
+        Lower,
+        Upper,
+        Both
+    }
+
     struct DepthConfig {
-        // set to true if you want the entire depth range
-        bool bothSides;
-        // set to 0 for amount in token0, set to 1 for amount in token1
-        bool token0;
-        // ?? for the precise calculation.. tbh i think we should just always calculate exact?
+        Side side;
+        // Set to true for amount in token0, set to false for amount in token1
+        bool amountInToken0;
+        // Set to true for the precise calculation. // TODO: austin to explain more of what this means.
         bool exact;
     }
 
