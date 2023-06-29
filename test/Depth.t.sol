@@ -170,7 +170,7 @@ contract CounterTest is Test {
 
         IDepth.DepthConfig[] memory config = new  IDepth.DepthConfig[](4);
         for (uint256 i = 0; i < 4; i++) {
-            config[i] = IDepth.DepthConfig({side: IDepth.Side.Upper, amountInToken0: false, exact: false});
+            config[i] = IDepth.DepthConfig({side: IDepth.Side.Lower, amountInToken0: false, exact: false});
         }
 
         uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
@@ -221,7 +221,7 @@ contract CounterTest is Test {
 
         IDepth.DepthConfig[] memory config = new  IDepth.DepthConfig[](4);
         for (uint256 i = 0; i < 4; i++) {
-            config[i] = IDepth.DepthConfig({side: IDepth.Side.Upper, amountInToken0: false, exact: true});
+            config[i] = IDepth.DepthConfig({side: IDepth.Side.Lower, amountInToken0: false, exact: true});
         }
 
         uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
