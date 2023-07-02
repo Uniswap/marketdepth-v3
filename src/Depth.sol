@@ -20,7 +20,6 @@ contract Depth is IDepth {
         require(sqrtDepthX96.length == configs.length, "LengthMismatch");
         amounts = new uint256[](sqrtDepthX96.length);
 
-        // we may just want to do calculation inside here instead of calling out to func
         IDepth.PoolVariables memory poolVariables = initializePoolVariables(pool);
 
         for (uint256 i = 0; i < sqrtDepthX96.length; i++) {
