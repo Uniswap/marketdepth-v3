@@ -1,7 +1,7 @@
 ## Uniswap v3 market depth calculator
 
 Calculates market depth (the amount of assets avaiable to trade within a certain price region)
-Inspired by (Uniswap market depth study)[https://github.com/Uniswap/v3-market-depth-study]
+Inspired by [Uniswap market depth study](https://github.com/Uniswap/v3-market-depth-study) and [python implimentation](https://github.com/Uniswap/v3-market-depth-study)
 
 ### Usage
 Can be used for routing heuritistics, onchain liquidity calculations, or for plotting.
