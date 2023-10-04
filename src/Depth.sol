@@ -113,16 +113,22 @@ contract Depth is IDepth {
             // then the loop above breaks
             if (upper ? sqrtPriceRatioNext > sqrtPriceX96Tgt : sqrtPriceRatioNext < sqrtPriceX96Tgt) {
                 sqrtPriceRatioNext = sqrtPriceX96Tgt;
-                tokenAmt += config.amountInToken0
-                    ? SqrtPriceMath.getAmount0Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false)
-                    : SqrtPriceMath.getAmount1Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false);
+
+                // we need to check this as these functions require liquidity > 0
+                if (liquiditySpot != 0) {
+                    tokenAmt += config.amountInToken0
+                        ? SqrtPriceMath.getAmount0Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false)
+                        : SqrtPriceMath.getAmount1Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false);
+                }
                 break;
             }
 
-            tokenAmt += config.amountInToken0
-                ? SqrtPriceMath.getAmount0Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false)
-                : SqrtPriceMath.getAmount1Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false);
-
+            // we need to check this as these functions require liquidity > 0
+            if (liquiditySpot != 0) {
+                tokenAmt += config.amountInToken0
+                    ? SqrtPriceMath.getAmount0Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false)
+                    : SqrtPriceMath.getAmount1Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false);
+            }
             // find the amount of liquidity to shift before we calculate the next tick
             // kick out or add in the liquidiy that we are moving
             (, liquidityNet,,,,,,) = IUniswapV3Pool(poolVariables.pool).ticks(tickNext);
