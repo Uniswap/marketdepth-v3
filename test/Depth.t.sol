@@ -176,8 +176,10 @@ contract DepthTest is Test {
         delta1 = checkPosition(delta1);
         delta2 = checkPosition(delta2);
 
-        // this is 2% depth
+        // this is 2% depth - we could try other sizes
         uint256 sqrtPriceRatioX96 = 80016521857016597127997947904;
+
+        // run the solidity contract
         uint256[] memory solResults = runDepthCalculation(address(pool), sqrtPriceRatioX96, token0, side);
         uint256 solResult = solResults[0];
 
@@ -185,18 +187,18 @@ contract DepthTest is Test {
         vm.assume(solResult > 0);
 
         // create the string array to putting into ffi
-        string[] memory runJsInputs = new string[](6);
+        string[] memory runPyInputs = new string[](6);
 
         // build ffi command string
-        runJsInputs[0] = "python3";
-        runJsInputs[1] = "python/calc.py";
-        runJsInputs[2] = garrisonMintParamsToString(delta1);
-        runJsInputs[3] = garrisonMintParamsToString(delta2);
-        runJsInputs[4] = tokenBooltoString(token0);
-        runJsInputs[5] = sideToString(side);
+        runPyInputs[0] = "python3";
+        runPyInputs[1] = "python/calc.py";
+        runPyInputs[2] = garrisonMintParamsToString(delta1);
+        runPyInputs[3] = garrisonMintParamsToString(delta2);
+        runPyInputs[4] = tokenBooltoString(token0);
+        runPyInputs[5] = sideToString(side);
 
         // return the python result
-        bytes memory pythonResult = vm.ffi(runJsInputs);
+        bytes memory pythonResult = vm.ffi(runPyInputs);
         uint256 pyDepth = abi.decode(pythonResult, (uint256));
 
         // check to see if the python returns within the floating point limit 
