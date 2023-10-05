@@ -28,7 +28,7 @@ contract Depth is IDepth {
         return amounts;
     }
 
-    function _findNextTick(PoolVariables memory poolVariables, int24 tick, bool upper, bool lte)
+    function _findNextTick(PoolVariables memory poolVariables, int24 tick, bool upper, bool lte, bool reenterancy)
         internal
         view
         returns (int24 tickNext)
@@ -44,7 +44,22 @@ contract Depth is IDepth {
         }
 
         if (!initialized) {
-            tickNext = upper ? TickMath.MAX_TICK : TickMath.MIN_TICK;
+            // it is possible the pool is rounding down and finding the current tick which is uninitialized
+            // this happens if the pool was either
+            // 1. initialzied at a tick that does not have liquidity
+            // 2. moved to a tick then liquidity was burned.
+            // v3 deals with this by checking the direction the pool is moving and then iterating
+            // before finding the next tick
+            // to avoid overshooting, instead of just sending down, we check if the tick is initialized first
+            // and then we check if there is a tick lower that is still initialized
+            if ((tickNext == poolVariables.tick) && !reenterancy) {
+                (tickNext, initialized) =
+                    PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick - 1, !upper);
+            }
+
+            if (!initialized) {
+                tickNext = upper ? tick + 256 * poolVariables.tickSpacing : tick - 256 * poolVariables.tickSpacing;
+            }
         }
     }
 
@@ -95,7 +110,7 @@ contract Depth is IDepth {
             direction = int24(-1);
         }
 
-        int24 tickNext = _findNextTick(poolVariables, poolVariables.tick, upper, true);
+        int24 tickNext = _findNextTick(poolVariables, poolVariables.tick, upper, true, false);
 
         uint160 sqrtPriceX96Current = poolVariables.sqrtPriceX96;
         uint128 liquiditySpot = poolVariables.liquidity;
@@ -140,7 +155,7 @@ contract Depth is IDepth {
 
             // find what tick we will be shifting to
             // shift the range
-            tickNext = _findNextTick(poolVariables, tickNext, upper, false);
+            tickNext = _findNextTick(poolVariables, tickNext, upper, false, false);
             sqrtPriceX96Current = sqrtPriceRatioNext;
         }
         return tokenAmt;
