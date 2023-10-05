@@ -58,6 +58,8 @@ contract Depth is IDepth {
             }
 
             if (!initialized) {
+                // the tick bitmap searches within 256 tick spacings, so assume that there exists a tick
+                // initialized outside of that range - this functionally does not matter if depth under 2%
                 tickNext = upper ? tick + 256 * poolVariables.tickSpacing : tick - 256 * poolVariables.tickSpacing;
             }
         }
