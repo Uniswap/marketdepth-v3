@@ -21,13 +21,30 @@ contract DepthTest is Test {
     IUniswapV3Factory v3Factory;
     IUniswapV3Pool pool;
 
+    // .25%, .5%, 1%, 2% depths
+    // sqrt(1+.0025) * Q96, sqrt(1+.005) * Q96, sqrt(1+.01) * Q96, sqrt(1+.02) * Q96, 
+    uint256[4] depthsValues = [
+            uint256(79327135897655778240513441792),
+            uint256(79425985949584623951891398656),
+            uint256(79623317895830908422001262592),
+            uint256(80016521857016597127997947904)
+        ];
+
+    // we do them in reverse order bc 100 bps is the most likely to fail vm.assume
+    uint24[4] feeTiers = [
+            uint24(10000),
+            uint24(3000),
+            uint24(500),
+            uint24(100)        
+        ];
+
+
     address me = vm.addr(0x1);
 
     struct PositionDelta {
         int8 tickLower;
         int8 tickUpper;
-        uint8 token0Amt;
-        uint128 liquidity;
+        uint128 liquidityDelta;
     }
 
     uint256 constant ONE_PIP = 1e6;
@@ -42,12 +59,12 @@ contract DepthTest is Test {
         v3Factory = IUniswapV3Factory(0x1F98431c8aD98523631AE4a59f267346ea31F984);
     }
 
-    function setV3Pools() public {
+    function setV3Pools(uint24 feeTier) public {
         // deploy new tokens to create clean pools
         MockToken token0 = new MockToken(me);
         MockToken token1 = new MockToken(me);
 
-        address poolAddress = v3Factory.createPool(address(token0), address(token1), 500);
+        address poolAddress = v3Factory.createPool(address(token0), address(token1), feeTier);
         pool = IUniswapV3Pool(poolAddress);
         pool.initialize(1 << 96);
 
@@ -102,12 +119,17 @@ contract DepthTest is Test {
     }
 
     function checkPosition(PositionDelta memory delta) public returns (PositionDelta memory) {
-        vm.assume(delta.token0Amt > 0);
+        // we need the position to not round down
+        vm.assume(delta.liquidityDelta > 1e9);
+        
+        // make sure we don't overflow liquidity per tick
+        vm.assume(delta.liquidityDelta < (pool.maxLiquidityPerTick() / 2));
 
+        int24 tickSpacing = pool.tickSpacing();
         // we want to sufficiently randomize but the pool requires that the ticks
         // are on the tick spacing - so we push them to the closest
-        delta.tickLower = (delta.tickLower / 10) * 10;
-        delta.tickUpper = (delta.tickUpper / 10) * 10;
+        delta.tickLower = int8((int24(delta.tickLower) / tickSpacing) * tickSpacing);
+        delta.tickUpper = int8((int24(delta.tickUpper) / tickSpacing) * tickSpacing);
 
         // tick have to be at least 1 tick spacing apart to not break
         vm.assume(delta.tickLower != delta.tickUpper);
@@ -116,7 +138,8 @@ contract DepthTest is Test {
         if (delta.tickLower > delta.tickUpper) {
             (delta.tickLower, delta.tickUpper) = (delta.tickUpper, delta.tickLower);
         }
-        delta.liquidity = createPosition(delta);
+        // it is possible that the positions 
+        delta.liquidityDelta = createPosition(delta);
 
         return delta;
     }
@@ -124,20 +147,10 @@ contract DepthTest is Test {
     function createPosition(PositionDelta memory delta) public returns (uint128) {
         uint160 sqrtRatioAX96 = TickMath.getSqrtRatioAtTick(int24(delta.tickLower));
         uint160 sqrtRatioBX96 = TickMath.getSqrtRatioAtTick(int24(delta.tickUpper));
-
-        // its easier to make sure that we have the expected numbers by going from tokens
-        // to liquidity
-        uint128 liquidity = LiquidityAmounts.getLiquidityForAmount0(
-            sqrtRatioAX96, sqrtRatioBX96, uint128(delta.token0Amt) * uint128(type(uint64).max)
-        );
-        // make sure we don't overflow liquidity per tick
-        if (liquidity > pool.maxLiquidityPerTick()) {
-            liquidity = pool.maxLiquidityPerTick();
-        }
-
-        // we then overwrite to get on a specific liquidity value
+        
+        // calculate the tokens needed for this level of liquidity
         (uint256 amount0, uint256 amount1) =
-            LiquidityAmounts.getAmountsForLiquidity(1 << 96, sqrtRatioAX96, sqrtRatioBX96, liquidity);
+            LiquidityAmounts.getAmountsForLiquidity(1 << 96, sqrtRatioAX96, sqrtRatioBX96, delta.liquidityDelta);
 
         mintParams = INonfungiblePositionManager.MintParams({
             token0: pool.token0(),
@@ -153,7 +166,7 @@ contract DepthTest is Test {
             deadline: block.timestamp + 100
         });
 
-        INonfungiblePositionManager(nftPosManagerAddress).mint(mintParams);
+        (,uint128 liquidity,,) = INonfungiblePositionManager(nftPosManagerAddress).mint(mintParams);
 
         return liquidity;
     }
@@ -165,29 +178,29 @@ contract DepthTest is Test {
         parameters = string(abi.encodePacked(parameters, ","));
         parameters = string(abi.encodePacked(parameters, vm.toString(int256(delta.tickUpper))));
         parameters = string(abi.encodePacked(parameters, ","));
-        parameters = string(abi.encodePacked(parameters, vm.toString(int256(delta.liquidity))));
+        parameters = string(abi.encodePacked(parameters, vm.toString(int256(delta.liquidityDelta))));
 
         return parameters;
     }
 
-    function runTest(PositionDelta memory delta1, PositionDelta memory delta2, bool token0, IDepth.Side side) public {
-        setV3Pools();
-
+    
+    function runTest(PositionDelta memory delta1, PositionDelta memory delta2, bool token0, IDepth.Side side, uint256 depthIdx, uint256 feeIdx) public {
+        // set up the pools and try data
+        setV3Pools(feeTiers[feeIdx]);
         delta1 = checkPosition(delta1);
         delta2 = checkPosition(delta2);
 
-        // this is 2% depth - we could try other sizes
-        uint256 sqrtPriceRatioX96 = 80016521857016597127997947904;
-
         // run the solidity contract
-        uint256[] memory solResults = runDepthCalculation(address(pool), sqrtPriceRatioX96, token0, side);
+        uint256 sqrtDepthX96 = depthsValues[depthIdx];
+
+        uint256[] memory solResults = runDepthCalculation(address(pool), sqrtDepthX96, token0, side);
         uint256 solResult = solResults[0];
 
         // ffi cannot handle a return of 0
         vm.assume(solResult > 0);
 
         // create the string array to putting into ffi
-        string[] memory runPyInputs = new string[](6);
+        string[] memory runPyInputs = new string[](8);
 
         // build ffi command string
         runPyInputs[0] = "python3";
@@ -196,6 +209,8 @@ contract DepthTest is Test {
         runPyInputs[3] = garrisonMintParamsToString(delta2);
         runPyInputs[4] = tokenBooltoString(token0);
         runPyInputs[5] = sideToString(side);
+        runPyInputs[6] = vm.toString(depthIdx); // sqrtDepthX96
+        runPyInputs[7] = vm.toString(feeIdx); // feeTier
 
         // return the python result
         bytes memory pythonResult = vm.ffi(runPyInputs);
@@ -209,18 +224,39 @@ contract DepthTest is Test {
         assertEq(resultsDiff * ONE_PIP / pyDepth, 0);
     }
 
-    /// forge-config: default.fuzz.runs = 50
-    function testTokenBoth(PositionDelta memory delta1, PositionDelta memory delta2, bool token0) public {
-        runTest(delta1, delta2, token0, IDepth.Side.Both);
+
+    function truncateSearchSpace(uint8 feeIdx, uint8 depthIdx) public pure returns (uint8, uint8) {
+        // we want to fuzz a choice between 4 values, but we don't know which one we will pick
+        // we truncate down from 2^8 by dividing by 84 which approx a max of 3 (we cant divide by 64) bc
+        // need 4 numbers not 5
+        feeIdx = feeIdx / 84;
+        depthIdx = depthIdx / 84;
+        vm.assume(feeIdx <= 3);
+        vm.assume(depthIdx <= 3);
+
+        return (feeIdx, depthIdx);
+    } 
+
+    /// forge-config: default.fuzz.runs = 200
+    function testTokenBoth(PositionDelta memory delta1, PositionDelta memory delta2, bool token0, uint8 feeIdx, uint8 depthIdx) public {
+        (feeIdx, depthIdx) = truncateSearchSpace(feeIdx, depthIdx);
+
+        runTest(delta1, delta2, token0, IDepth.Side.Both, depthIdx, feeIdx);
     }
 
-    /// forge-config: default.fuzz.runs = 50
-    function testTokenLower(PositionDelta memory delta1, PositionDelta memory delta2, bool token0) public {
-        runTest(delta1, delta2, token0, IDepth.Side.Lower);
+    /// forge-config: default.fuzz.runs = 200
+    function testTokenLower(PositionDelta memory delta1, PositionDelta memory delta2, bool token0, uint8 feeIdx, uint8 depthIdx) public {
+        (feeIdx, depthIdx) = truncateSearchSpace(feeIdx, depthIdx);
+
+        runTest(delta1, delta2, token0, IDepth.Side.Lower, depthIdx, feeIdx);
+
     }
 
-    /// forge-config: default.fuzz.runs = 50
-    function testTokenUpper(PositionDelta memory delta1, PositionDelta memory delta2, bool token0) public {
-        runTest(delta1, delta2, token0, IDepth.Side.Upper);
+    /// forge-config: default.fuzz.runs = 200
+    function testTokenUpper(PositionDelta memory delta1, PositionDelta memory delta2, bool token0, uint8 feeIdx, uint8 depthIdx) public {
+        (feeIdx, depthIdx) = truncateSearchSpace(feeIdx, depthIdx);
+
+        runTest(delta1, delta2, token0, IDepth.Side.Upper, depthIdx, feeIdx);   
+
     }
 }

@@ -9,6 +9,7 @@ import {SqrtPriceMath} from "v3-core/contracts/libraries/SqrtPriceMath.sol";
 import {LiquidityMath} from "v3-core/contracts/libraries/LiquidityMath.sol";
 import {IDepth} from "./IDepth.sol";
 import {PoolTickBitmap} from "./PoolTickBitmap.sol";
+import "forge-std/Test.sol";
 
 contract Depth is IDepth {
     function calculateDepths(address pool, uint256[] memory sqrtDepthX96, DepthConfig[] memory configs)
@@ -60,7 +61,7 @@ contract Depth is IDepth {
             if (!initialized) {
                 // the tick bitmap searches within 256 tick spacings, so assume that there exists a tick
                 // initialized outside of that range - this functionally does not matter if depth under 2%
-                tickNext = upper ? tick + 256 * poolVariables.tickSpacing : tick - 256 * poolVariables.tickSpacing;
+                tickNext = upper ? tick + 255 * poolVariables.tickSpacing : tick - 255 * poolVariables.tickSpacing;
             }
         }
     }

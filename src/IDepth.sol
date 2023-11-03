@@ -16,7 +16,7 @@ interface IDepth {
         Side side;
         // Set to true for amount in token0, set to false for amount in token1
         bool amountInToken0;
-        // Set to true for the precise calculation. // TODO: austin to explain more of what this means.
+        // Set to true for the precise calculation.
         bool exact;
     }
 

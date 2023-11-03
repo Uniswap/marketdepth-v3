@@ -17,6 +17,9 @@ def priceToToken1(priceLower, priceUpper, liquidity):
     
     return (liquidity * (sqrtPriceUpper - sqrtPriceLower))
 
+sqrtDepths = [.0025, .005, .01, .02]
+feeToTickSpacing = [200, 60, 10, 1]
+  
 args = sys.argv
 
 # parse the command line arguments
@@ -25,10 +28,14 @@ pos1 = [*map(lambda x: int(x), args[1].split(","))]
 pos2 = [*map(lambda x: int(x), args[2].split(","))]
 token = args[3]
 direction = args[4]
+sqrtDepthX96Index = args[5]
+feeTierIdx = args[6]
+
+# parse the args
+depth = sqrtDepths[int(sqrtDepthX96Index)]
+ts = feeToTickSpacing[int(feeTierIdx)]
 
 # these are invariants currently in the system
-depth = .02
-ts = 10
 lower = 1
 upper = 1
 
@@ -42,10 +49,9 @@ if direction == 'lower' or direction == 'both':
 # srry
 amtOut = 0
 
-
 # we know that the tick-spacing on the fuzzer is -256, 256
 # we iterate just closer to that
-for tick in range(-300, 300 + 1, 10):
+for tick in range(-300, 300 + 1, ts):
     liquidity = 0
     
     if pos1[0] <= tick and tick < pos1[1]:
@@ -60,10 +66,11 @@ for tick in range(-300, 300 + 1, 10):
     tickLowerSqrtPrice = tickToPrice(tick)
     tickUpperSqrtPrice = tickToPrice(tick+ts)
     lowerPrice = 0
-    upperPrice = 1.02
+    upperPrice = 0
     
-    # test the lower ticks
-    if tickLowerSqrtPrice < lower:
+    # is the lowest price of depth range greater 
+    # than highest price of the tick range?
+    if tickUpperSqrtPrice <= lower:
         continue
     # truncate down to the end of the depth range
     elif tickLowerSqrtPrice <= lower < tickUpperSqrtPrice:
@@ -72,8 +79,9 @@ for tick in range(-300, 300 + 1, 10):
     else:
         lowerPrice = tickLowerSqrtPrice
         
-    # test the upper ticks
-    if upper < tickLowerSqrtPrice:
+    # is the highest price of the depth range smaller 
+    # than lowest price of the tick range?
+    if upper <= tickLowerSqrtPrice:
         continue
     # truncate down to the top of the depth range
     elif tickLowerSqrtPrice <= upper < tickUpperSqrtPrice:
