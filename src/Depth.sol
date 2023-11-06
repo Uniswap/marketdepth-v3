@@ -9,6 +9,7 @@ import {SqrtPriceMath} from "v3-core/contracts/libraries/SqrtPriceMath.sol";
 import {LiquidityMath} from "v3-core/contracts/libraries/LiquidityMath.sol";
 import {IDepth} from "./IDepth.sol";
 import {PoolTickBitmap} from "./PoolTickBitmap.sol";
+import {FixedPoint96} from "v3-core/contracts/libraries/FixedPoint96.sol";
 
 contract Depth is IDepth {
     function calculateDepths(address pool, uint256[] memory sqrtDepthX96, DepthConfig[] memory configs)
@@ -66,7 +67,7 @@ contract Depth is IDepth {
             if (!initialized) {
                 // the tick bitmap searches within 256 tick spacings, so assume that there exists a tick
                 // initialized outside of that range - this functionally does not matter if depth under 2%
-                tickNext = upper ? tick + 255 * poolVariables.tickSpacing : tick - 255 * poolVariables.tickSpacing;
+                tickNext = upper ? tick + (type(uint8).max - 1) * poolVariables.tickSpacing : tick - (type(uint8).max - 1) * poolVariables.tickSpacing;
             }
         }
     }
@@ -99,10 +100,10 @@ contract Depth is IDepth {
 
         if (upper) {
             direction = int24(1);
-            sqrtPriceX96Tgt = uint160(FullMath.mulDiv(poolVariables.sqrtPriceX96, sqrtDepthX96, 1 << 96));
+            sqrtPriceX96Tgt = uint160(FullMath.mulDiv(poolVariables.sqrtPriceX96, sqrtDepthX96, FixedPoint96.Q96));
             require(poolVariables.sqrtPriceX96 <= sqrtPriceX96Tgt, "UpperboundOverflow");
         } else {
-            sqrtPriceX96Tgt = uint160(FullMath.mulDiv(poolVariables.sqrtPriceX96, 1 << 96, sqrtDepthX96));
+            sqrtPriceX96Tgt = uint160(FullMath.mulDiv(poolVariables.sqrtPriceX96, FixedPoint96.Q96, sqrtDepthX96));
             if (config.exact) {
                 // we want to calculate deflator = (1-p)^2 / 2 to approximate (1-p) instead of 1/(1+p)
                 // because 1 / (1 + p) * price * (1-deflator) = (1-p) * price
@@ -111,9 +112,9 @@ contract Depth is IDepth {
                 // 112045541949572287496682733568 = sqrt(2) * 2^96, which breaks this code/deflation
                 require(sqrtDepthX96 < 112045541949572287496682733568, "ExceededMaxDepth");
 
-                uint256 deflator = (sqrtDepthX96 * sqrtDepthX96 - (4 * (1 << 96)) - (1 << 192)) / (1 << 96);
+                uint256 deflator = (sqrtDepthX96 * sqrtDepthX96 - (4 * (FixedPoint96.Q96)) - (FixedPoint96.Q96 * FixedPoint96.Q96)) / (FixedPoint96.Q96);
                 sqrtPriceX96Tgt =
-                    uint160(FullMath.mulDiv(sqrtPriceX96Tgt, ((1 << 192) - (deflator * deflator) / 2), 1 << 192));
+                    uint160(FullMath.mulDiv(sqrtPriceX96Tgt, ((FixedPoint96.Q96 * FixedPoint96.Q96) - (deflator * deflator) / 2), FixedPoint96.Q96 * FixedPoint96.Q96));
             }
             direction = int24(-1);
         }
