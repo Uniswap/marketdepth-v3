@@ -22,22 +22,16 @@ contract DepthTest is Test {
     IUniswapV3Pool pool;
 
     // .25%, .5%, 1%, 2% depths
-    // sqrt(1+.0025) * Q96, sqrt(1+.005) * Q96, sqrt(1+.01) * Q96, sqrt(1+.02) * Q96, 
+    // sqrt(1+.0025) * Q96, sqrt(1+.005) * Q96, sqrt(1+.01) * Q96, sqrt(1+.02) * Q96,
     uint256[4] depthsValues = [
-            uint256(79327135897655778240513441792),
-            uint256(79425985949584623951891398656),
-            uint256(79623317895830908422001262592),
-            uint256(80016521857016597127997947904)
-        ];
+        uint256(79327135897655778240513441792),
+        uint256(79425985949584623951891398656),
+        uint256(79623317895830908422001262592),
+        uint256(80016521857016597127997947904)
+    ];
 
     // we do them in reverse order bc 100 bps is the most likely to fail vm.assume
-    uint24[4] feeTiers = [
-            uint24(10000),
-            uint24(3000),
-            uint24(500),
-            uint24(100)        
-        ];
-
+    uint24[4] feeTiers = [uint24(10000), uint24(3000), uint24(500), uint24(100)];
 
     address me = vm.addr(0x1);
 
@@ -96,7 +90,6 @@ contract DepthTest is Test {
         return token_type;
     }
 
-
     function runDepthCalculation(address poolAddress, uint256 sqrtPriceRatioX96, bool amountInToken0, IDepth.Side side)
         public
         view
@@ -121,7 +114,7 @@ contract DepthTest is Test {
     function checkPosition(PositionDelta memory delta) public returns (PositionDelta memory) {
         // we need the position to not round down
         vm.assume(delta.liquidityDelta > 1e9);
-        
+
         // make sure we don't overflow liquidity per tick
         vm.assume(delta.liquidityDelta < (pool.maxLiquidityPerTick() / 2));
 
@@ -138,7 +131,7 @@ contract DepthTest is Test {
         if (delta.tickLower > delta.tickUpper) {
             (delta.tickLower, delta.tickUpper) = (delta.tickUpper, delta.tickLower);
         }
-        // it is possible that the positions 
+        // it is possible that the positions
         delta.liquidityDelta = createPosition(delta);
 
         return delta;
@@ -147,7 +140,7 @@ contract DepthTest is Test {
     function createPosition(PositionDelta memory delta) public returns (uint128) {
         uint160 sqrtRatioAX96 = TickMath.getSqrtRatioAtTick(int24(delta.tickLower));
         uint160 sqrtRatioBX96 = TickMath.getSqrtRatioAtTick(int24(delta.tickUpper));
-        
+
         // calculate the tokens needed for this level of liquidity
         (uint256 amount0, uint256 amount1) =
             LiquidityAmounts.getAmountsForLiquidity(1 << 96, sqrtRatioAX96, sqrtRatioBX96, delta.liquidityDelta);
@@ -166,7 +159,7 @@ contract DepthTest is Test {
             deadline: block.timestamp + 100
         });
 
-        (,uint128 liquidity,,) = INonfungiblePositionManager(nftPosManagerAddress).mint(mintParams);
+        (, uint128 liquidity,,) = INonfungiblePositionManager(nftPosManagerAddress).mint(mintParams);
 
         return liquidity;
     }
@@ -183,8 +176,14 @@ contract DepthTest is Test {
         return parameters;
     }
 
-    
-    function runTest(PositionDelta memory delta1, PositionDelta memory delta2, bool token0, IDepth.Side side, uint256 depthIdx, uint256 feeIdx) public {
+    function runTest(
+        PositionDelta memory delta1,
+        PositionDelta memory delta2,
+        bool token0,
+        IDepth.Side side,
+        uint256 depthIdx,
+        uint256 feeIdx
+    ) public {
         // set up the pools and try data
         setV3Pools(feeTiers[feeIdx]);
         delta1 = checkPosition(delta1);
@@ -216,14 +215,13 @@ contract DepthTest is Test {
         bytes memory pythonResult = vm.ffi(runPyInputs);
         uint256 pyDepth = abi.decode(pythonResult, (uint256));
 
-        // check to see if the python returns within the floating point limit 
+        // check to see if the python returns within the floating point limit
         (uint256 gtResult, uint256 ltResult) = pyDepth > solResult ? (pyDepth, solResult) : (solResult, pyDepth);
         uint256 resultsDiff = gtResult - ltResult;
 
         // assert solc/py result is at most off by 1/100th of a bip (aka one pip)
         assertEq(resultsDiff * ONE_PIP / pyDepth, 0);
     }
-
 
     function truncateSearchSpace(uint8 feeIdx, uint8 depthIdx) public pure returns (uint8, uint8) {
         // we want to fuzz a choice between 4 values, but we don't know which one we will pick
@@ -235,28 +233,44 @@ contract DepthTest is Test {
         vm.assume(depthIdx <= 3);
 
         return (feeIdx, depthIdx);
-    } 
+    }
 
     /// forge-config: default.fuzz.runs = 200
-    function testTokenBoth(PositionDelta memory delta1, PositionDelta memory delta2, bool token0, uint8 feeIdx, uint8 depthIdx) public {
+    function testTokenBoth(
+        PositionDelta memory delta1,
+        PositionDelta memory delta2,
+        bool token0,
+        uint8 feeIdx,
+        uint8 depthIdx
+    ) public {
         (feeIdx, depthIdx) = truncateSearchSpace(feeIdx, depthIdx);
 
         runTest(delta1, delta2, token0, IDepth.Side.Both, depthIdx, feeIdx);
     }
 
     /// forge-config: default.fuzz.runs = 200
-    function testTokenLower(PositionDelta memory delta1, PositionDelta memory delta2, bool token0, uint8 feeIdx, uint8 depthIdx) public {
+    function testTokenLower(
+        PositionDelta memory delta1,
+        PositionDelta memory delta2,
+        bool token0,
+        uint8 feeIdx,
+        uint8 depthIdx
+    ) public {
         (feeIdx, depthIdx) = truncateSearchSpace(feeIdx, depthIdx);
 
         runTest(delta1, delta2, token0, IDepth.Side.Lower, depthIdx, feeIdx);
-
     }
 
     /// forge-config: default.fuzz.runs = 200
-    function testTokenUpper(PositionDelta memory delta1, PositionDelta memory delta2, bool token0, uint8 feeIdx, uint8 depthIdx) public {
+    function testTokenUpper(
+        PositionDelta memory delta1,
+        PositionDelta memory delta2,
+        bool token0,
+        uint8 feeIdx,
+        uint8 depthIdx
+    ) public {
         (feeIdx, depthIdx) = truncateSearchSpace(feeIdx, depthIdx);
 
-        runTest(delta1, delta2, token0, IDepth.Side.Upper, depthIdx, feeIdx);   
-
+        runTest(delta1, delta2, token0, IDepth.Side.Upper, depthIdx, feeIdx);
     }
 }

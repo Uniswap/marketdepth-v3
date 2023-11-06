@@ -9,7 +9,6 @@ import {SqrtPriceMath} from "v3-core/contracts/libraries/SqrtPriceMath.sol";
 import {LiquidityMath} from "v3-core/contracts/libraries/LiquidityMath.sol";
 import {IDepth} from "./IDepth.sol";
 import {PoolTickBitmap} from "./PoolTickBitmap.sol";
-import "forge-std/Test.sol";
 
 contract Depth is IDepth {
     function calculateDepths(address pool, uint256[] memory sqrtDepthX96, DepthConfig[] memory configs)
@@ -44,6 +43,8 @@ contract Depth is IDepth {
                 PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick, !upper);
         }
 
+        // we most likely hit the end of the word that we are in - we need to know if there is another word that
+        // we can move into
         if (!initialized) {
             // it is possible the pool is rounding down and finding the current tick which is uninitialized
             // this happens if the pool was either
@@ -53,11 +54,15 @@ contract Depth is IDepth {
             // before finding the next tick
             // to avoid overshooting, instead of just sending down, we check if the tick is initialized first
             // and then we check if there is a tick lower that is still initialized
+            // this means we remove a redundant call. v3 also needs to do this for cacheing fee values
+            // which we do not care about
             if ((tickNext == poolVariables.tick) && !reenterancy) {
                 (tickNext, initialized) =
                     PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick - 1, !upper);
             }
 
+            // if we hit the end of the word that we are in and there is no shift, then there are no initialized
+            // ticks within 256 tick spacings
             if (!initialized) {
                 // the tick bitmap searches within 256 tick spacings, so assume that there exists a tick
                 // initialized outside of that range - this functionally does not matter if depth under 2%
