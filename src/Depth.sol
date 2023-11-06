@@ -28,7 +28,7 @@ contract Depth is IDepth {
         return amounts;
     }
 
-    function _findNextTick(PoolVariables memory poolVariables, int24 tick, bool upper, bool lte, bool reenterancy)
+    function _findNextTick(PoolVariables memory poolVariables, int24 tick, bool upper, bool lte)
         internal
         view
         returns (int24 tickNext)
@@ -55,8 +55,8 @@ contract Depth is IDepth {
             // to avoid overshooting, instead of just sending down, we check if the tick is initialized first
             // and then we check if there is a tick lower that is still initialized
             // this means we remove a redundant call. v3 also needs to do this for cacheing fee values
-            // which we do not care about
-            if ((tickNext == poolVariables.tick) && !reenterancy) {
+            // which we do not care about - we don't want to hit this over and over again, so we don't let us recall this
+            if (tickNext == poolVariables.tick) {
                 (tickNext, initialized) =
                     PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick - 1, !upper);
             }
@@ -118,7 +118,7 @@ contract Depth is IDepth {
             direction = int24(-1);
         }
 
-        int24 tickNext = _findNextTick(poolVariables, poolVariables.tick, upper, true, false);
+        int24 tickNext = _findNextTick(poolVariables, poolVariables.tick, upper, true);
 
         uint160 sqrtPriceX96Current = poolVariables.sqrtPriceX96;
         uint128 liquiditySpot = poolVariables.liquidity;
@@ -163,7 +163,7 @@ contract Depth is IDepth {
 
             // find what tick we will be shifting to
             // shift the range
-            tickNext = _findNextTick(poolVariables, tickNext, upper, false, false);
+            tickNext = _findNextTick(poolVariables, tickNext, upper, false);
             sqrtPriceX96Current = sqrtPriceRatioNext;
         }
         return tokenAmt;
