@@ -55,7 +55,7 @@ contract Depth is IDepth {
             // to avoid overshooting, instead of just sending down, we check if the tick is initialized first
             // and then we check if there is a tick lower that is still initialized
             // this means we remove a redundant call. v3 also needs to do this for cacheing fee values
-            // which we do not care about - we don't want to hit this over and over again, so we don't let us recall this
+            // which we do not care about
             if (tickNext == poolVariables.tick) {
                 (tickNext, initialized) =
                     PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick - 1, !upper);
