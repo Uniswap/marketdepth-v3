@@ -3,444 +3,274 @@ pragma solidity ^0.7.6;
 pragma abicoder v2;
 
 import "forge-std/Test.sol";
-import "../src/TestToken.sol";
+import "../src/MockToken.sol";
+import "v3-core/contracts/UniswapV3Factory.sol";
 import "v3-core/contracts/interfaces/IUniswapV3Factory.sol";
 import "v3-core/contracts/interfaces/IUniswapV3Pool.sol";
 import "v3-periphery/contracts/interfaces/INonfungiblePositionManager.sol";
-import "v3-periphery/contracts/interfaces/IQuoterV2.sol";
+import "v3-periphery/contracts/libraries/LiquidityAmounts.sol";
 import "../src/Depth.sol";
 import {IDepth} from "../src/IDepth.sol";
 
-contract CounterTest is Test {
+contract DepthTest is Test {
     uint256 mainnetFork;
-
-    TestToken public token0;
-    TestToken public token1;
-
-    address poolAddress;
-    IUniswapV3Factory v3Factory;
-    IUniswapV3Pool pool;
-    INonfungiblePositionManager nftPosManager;
-
-    address nftPosManagerAddress = 0xC36442b4a4522E871399CD717aBDD847Ab11FE88;
-    address me = vm.addr(0x1);
-    INonfungiblePositionManager.MintParams mintParams;
-
     Depth public depth;
 
-    // this is the lower limit for floating point arithmetic
-    uint256 toleranceTrue = 1e10;
-    // we approximate the  difference so is it not as accurate. this equals 10 bps
-    uint256 toleranceApprox = 1e13;
-    uint256 pctDiff;
+    address nftPosManagerAddress = 0xC36442b4a4522E871399CD717aBDD847Ab11FE88;
+    INonfungiblePositionManager.MintParams mintParams;
+    IUniswapV3Factory v3Factory;
+    IUniswapV3Pool pool;
 
-    function evalulatePct(uint256 offchain, uint256 onchain) public pure returns (uint256) {
-        return offchain > onchain ? ((offchain - onchain) * 1e18 / onchain) : ((onchain - offchain) * 1e18 / offchain);
+    // .25%, .5%, 1%, 2% depths
+    // sqrt(1+.0025) * Q96, sqrt(1+.005) * Q96, sqrt(1+.01) * Q96, sqrt(1+.02) * Q96,
+    uint256[4] depthsValues = [
+        uint256(79327135897655778240513441792),
+        uint256(79425985949584623951891398656),
+        uint256(79623317895830908422001262592),
+        uint256(80016521857016597127997947904)
+    ];
+
+    // we do them in reverse order bc 100 bps is the most likely to fail vm.assume
+    uint24[4] feeTiers = [uint24(10000), uint24(3000), uint24(500), uint24(100)];
+
+    address me = vm.addr(0x1);
+
+    struct PositionDelta {
+        int8 tickLower;
+        int8 tickUpper;
+        uint128 liquidityDelta;
     }
 
-    function createV3() public {
-        uint256 MAX_INT = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff;
+    uint256 constant ONE_PIP = 1e6;
+
+    function setUp() public {
+        mainnetFork = vm.createFork(vm.envString("MAINNET_RPC_URL"));
+        vm.selectFork(mainnetFork);
+
+        vm.startPrank(me);
+
+        depth = new Depth();
         v3Factory = IUniswapV3Factory(0x1F98431c8aD98523631AE4a59f267346ea31F984);
-        nftPosManager = INonfungiblePositionManager(nftPosManagerAddress);
+    }
 
-        token0 = new TestToken("Test Token1", 'T1');
-        token1 = new TestToken("Test Token2", 'T2');
+    function setV3Pools(uint24 feeTier) public {
+        // deploy new tokens to create clean pools
+        MockToken token0 = new MockToken(me);
+        MockToken token1 = new MockToken(me);
 
-        poolAddress = v3Factory.createPool(address(token0), address(token1), 500);
+        address poolAddress = v3Factory.createPool(address(token0), address(token1), feeTier);
         pool = IUniswapV3Pool(poolAddress);
         pool.initialize(1 << 96);
 
-        token0.approve(nftPosManagerAddress, MAX_INT);
-        token1.approve(nftPosManagerAddress, MAX_INT);
+        token0.approve(address(nftPosManagerAddress), type(uint256).max);
+        token1.approve(address(nftPosManagerAddress), type(uint256).max);
+    }
+
+    function sideToString(IDepth.Side side) public pure returns (string memory) {
+        string memory sideString;
+        if (side == IDepth.Side.Lower) {
+            sideString = "lower";
+        } else if (side == IDepth.Side.Upper) {
+            sideString = "upper";
+        } else if (side == IDepth.Side.Both) {
+            sideString = "both";
+        }
+
+        return sideString;
+    }
+
+    function tokenBooltoString(bool token) public pure returns (string memory) {
+        string memory token_type;
+        if (token) {
+            token_type = "0";
+        } else {
+            token_type = "1";
+        }
+
+        return token_type;
+    }
+
+    function runDepthCalculation(address poolAddress, uint256 sqrtPriceRatioX96, bool amountInToken0, IDepth.Side side)
+        public
+        view
+        returns (uint256[] memory)
+    {
+        uint256[] memory depths = new uint256[](1);
+
+        for (uint256 i = 0; i < depths.length; i++) {
+            depths[i] = sqrtPriceRatioX96;
+        }
+
+        IDepth.DepthConfig[] memory config = new IDepth.DepthConfig[](1);
+        for (uint256 i = 0; i < depths.length; i++) {
+            config[i] = IDepth.DepthConfig({side: side, amountInToken0: amountInToken0, exact: false});
+        }
+
+        uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
+
+        return depthsMultiple;
+    }
+
+    function checkPosition(PositionDelta memory delta) public returns (PositionDelta memory) {
+        // we need the position to not round down
+        vm.assume(delta.liquidityDelta > 1e9);
+
+        // make sure we don't overflow liquidity per tick
+        vm.assume(delta.liquidityDelta < (pool.maxLiquidityPerTick() / 2));
+
+        int24 tickSpacing = pool.tickSpacing();
+        // we want to sufficiently randomize but the pool requires that the ticks
+        // are on the tick spacing - so we push them to the closest
+        delta.tickLower = int8((int24(delta.tickLower) / tickSpacing) * tickSpacing);
+        delta.tickUpper = int8((int24(delta.tickUpper) / tickSpacing) * tickSpacing);
+
+        // tick have to be at least 1 tick spacing apart to not break
+        vm.assume(delta.tickLower != delta.tickUpper);
+
+        // we can just flip the ticks instead of re-attempting the fuzz
+        if (delta.tickLower > delta.tickUpper) {
+            (delta.tickLower, delta.tickUpper) = (delta.tickUpper, delta.tickLower);
+        }
+        // it is possible that the positions
+        delta.liquidityDelta = createPosition(delta);
+
+        return delta;
+    }
+
+    function createPosition(PositionDelta memory delta) public returns (uint128) {
+        uint160 sqrtRatioAX96 = TickMath.getSqrtRatioAtTick(int24(delta.tickLower));
+        uint160 sqrtRatioBX96 = TickMath.getSqrtRatioAtTick(int24(delta.tickUpper));
+
+        // calculate the tokens needed for this level of liquidity
+        (uint256 amount0, uint256 amount1) =
+            LiquidityAmounts.getAmountsForLiquidity(1 << 96, sqrtRatioAX96, sqrtRatioBX96, delta.liquidityDelta);
 
         mintParams = INonfungiblePositionManager.MintParams({
             token0: pool.token0(),
             token1: pool.token1(),
             fee: pool.fee(),
-            tickLower: -500,
-            tickUpper: 500,
-            amount0Desired: 100000e18,
-            amount1Desired: 100000e18,
+            tickLower: int24(delta.tickLower),
+            tickUpper: int24(delta.tickUpper),
+            amount0Desired: amount0,
+            amount1Desired: amount1,
             amount0Min: 0,
             amount1Min: 0,
             recipient: me,
             deadline: block.timestamp + 100
         });
 
-        // create a position
-        // liquidity = 4050408317414413260938526
-        nftPosManager.mint(mintParams);
+        (, uint128 liquidity,,) = INonfungiblePositionManager(nftPosManagerAddress).mint(mintParams);
 
-        // create a second position
-        mintParams.tickLower = 0;
-        mintParams.tickUpper = 50;
-        // liquidity = 40052020798957899520605299
-        nftPosManager.mint(mintParams);
+        return liquidity;
     }
 
-    function setUp() public {
-        mainnetFork = vm.createFork(vm.envString("MAINNET_RPC_URL"));
-        vm.selectFork(mainnetFork);
-        vm.startPrank(me);
+    function garrisonMintParamsToString(PositionDelta memory delta) public pure returns (string memory) {
+        string memory parameters = "";
 
-        depth = new Depth();
+        parameters = string(abi.encodePacked(parameters, vm.toString(int256(delta.tickLower))));
+        parameters = string(abi.encodePacked(parameters, ","));
+        parameters = string(abi.encodePacked(parameters, vm.toString(int256(delta.tickUpper))));
+        parameters = string(abi.encodePacked(parameters, ","));
+        parameters = string(abi.encodePacked(parameters, vm.toString(int256(delta.liquidityDelta))));
 
-        createV3();
+        return parameters;
     }
 
-    function testDepthsToken0() public {
-        // testing against theoretical depth calculations from off-chain
-        // liquidityLow = 4050408317414413260938526 or liquidity from ticks [-500, 0] U [50, 500]
-        // liquidityHigh = 44102429116372312781543825 or liquidity from ticks [0, 50]
-        //
-        // .025% depth = 55024886201110690267136
-        // 55024886201110690267136 = (((sqrt(1 * 1.0025) - 1) / (sqrt(1 * 1.0025) * 1)) * liquidityHigh
-        //
-        // .05% depth = 109844327765827609690112
-        // 109844327765827609690112 = ((sqrt(1 * 1.005) - 1) / (sqrt(1 * 1.005) * 1)) * liquidityHigh
-        //
-        // 1% depth = 120101406051197037576192
-        // 120101406051197037576192 = ((sqrt(1.0001 ** 50) - 1) / (sqrt(1.0001 ** 50) * 1)) * liquidityHigh + ((sqrt(1 * 1.01) - sqrt(1.0001 ** 50)) / (sqrt(1 * 1.01) * sqrt(1.0001 ** 50))) * liquidityLow
+    function runTest(
+        PositionDelta memory delta1,
+        PositionDelta memory delta2,
+        bool token0,
+        IDepth.Side side,
+        uint256 depthIdx,
+        uint256 feeIdx
+    ) public {
+        // set up the pools and try data
+        setV3Pools(feeTiers[feeIdx]);
+        delta1 = checkPosition(delta1);
+        delta2 = checkPosition(delta2);
 
-        // 2% depth = 139906473874238226825216
-        // 139906473874238226825216 = ((sqrt(1.0001 ** 50) - 1) / (sqrt(1.0001 ** 50) * 1)) * liquidityHigh + ((sqrt(1 * 1.02) - sqrt(1.0001 ** 50)) / (sqrt(1 * 1.02) * sqrt(1.0001 ** 50))) * liquidityLow
-        // .025%, .05%, 1%, 2%
-        uint256[] memory depths = new uint256[](4);
-        uint256[4] memory depthsValues = [
-            uint256(79327135897655778240513441792),
-            uint256(79425985949584623951891398656),
-            uint256(79623317895830908422001262592),
-            uint256(80016521857016597127997947904)
-        ];
+        // run the solidity contract
+        uint256 sqrtDepthX96 = depthsValues[depthIdx];
 
-        for (uint256 i = 0; i < 4; i++) {
-            depths[i] = depthsValues[i];
-        }
+        uint256[] memory solResults = runDepthCalculation(address(pool), sqrtDepthX96, token0, side);
+        uint256 solResult = solResults[0];
 
-        IDepth.DepthConfig[] memory config = new  IDepth.DepthConfig[](4);
-        for (uint256 i = 0; i < 4; i++) {
-            config[i] = IDepth.DepthConfig({side: IDepth.Side.Upper, amountInToken0: true, exact: false});
-        }
+        // ffi cannot handle a return of 0
+        vm.assume(solResult > 0);
 
-        uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
-        uint256[4] memory offchainCalculations = [
-            uint256(55024886201110690267136),
-            uint256(109844327765827609690112),
-            uint256(120101406051197037576192),
-            uint256(139906473874238226825216)
-        ];
+        // create the string array to putting into ffi
+        string[] memory runPyInputs = new string[](8);
 
-        bool truth = true;
-        for (uint256 i = 0; i < offchainCalculations.length; i++) {
-            // test if our floating point calculations is within lower bound of floating point arithmetic
-            truth = truth && (evalulatePct(depthsMultiple[i], offchainCalculations[i]) < toleranceTrue);
-        }
+        // build ffi command string
+        runPyInputs[0] = "python3";
+        runPyInputs[1] = "python/calc.py";
+        runPyInputs[2] = garrisonMintParamsToString(delta1);
+        runPyInputs[3] = garrisonMintParamsToString(delta2);
+        runPyInputs[4] = tokenBooltoString(token0);
+        runPyInputs[5] = sideToString(side);
+        runPyInputs[6] = vm.toString(depthIdx); // sqrtDepthX96
+        runPyInputs[7] = vm.toString(feeIdx); // feeTier
 
-        assertEq(truth, true);
+        // return the python result
+        bytes memory pythonResult = vm.ffi(runPyInputs);
+        uint256 pyDepth = abi.decode(pythonResult, (uint256));
+
+        // check to see if the python returns within the floating point limit
+        (uint256 gtResult, uint256 ltResult) = pyDepth > solResult ? (pyDepth, solResult) : (solResult, pyDepth);
+        uint256 resultsDiff = gtResult - ltResult;
+
+        // assert solc/py result is at most off by 1/100th of a bip (aka one pip)
+        assertEq(resultsDiff * ONE_PIP / pyDepth, 0);
     }
 
-    function testDepthsToken1() public {
-        // testing against theoretical depth calculations from off-chain
-        // liquidityLow = 4050408317414413260938526 or liquidity from ticks [-500, 0] U [50, 500]
-        // liquidityHigh = 44102429116372312781543825 or liquidity from ticks [0, 50]
-        //
-        // .025% depth = 5053536986492639903744
-        // 5053536986492639903744 = (sqrt(1) - sqrt(1 / (1 + .0025))) * liquidityLow
-        //
-        // .05% depth = 10088205745527348789248
-        // 10088205745527348789248 = (sqrt(1) - sqrt(1 / (1 + .005))) * liquidityLow
-        //
-        // 1% depth = 20101406051205610733568
-        // 20101406051205610733568 = (sqrt(1) - sqrt(1 / (1 + .01))) * liquidityLow
+    function truncateSearchSpace(uint8 feeIdx, uint8 depthIdx) public pure returns (uint8, uint8) {
+        // we want to fuzz a choice between 4 values, but we don't know which one we will pick
+        // we truncate down from 2^8 by dividing by 84 which approx a max of 3 (we cant divide by 64) bc
+        // need 4 numbers not 5
+        feeIdx = feeIdx / 84;
+        depthIdx = depthIdx / 84;
+        vm.assume(feeIdx <= 3);
+        vm.assume(depthIdx <= 3);
 
-        // 2% depth = 39906473874246514769920
-        // 39906473874246514769920 = (sqrt(1) - sqrt(1 / (1 + .02))) * liquidityLow
-        // .025%, .05%, 1%, 2%
-        uint256[] memory depths = new uint256[](4);
-        uint256[4] memory depthsValues = [
-            uint256(79327135897655778240513441792),
-            uint256(79425985949584623951891398656),
-            uint256(79623317895830908422001262592),
-            uint256(80016521857016597127997947904)
-        ];
-
-        for (uint256 i = 0; i < 4; i++) {
-            depths[i] = depthsValues[i];
-        }
-
-        IDepth.DepthConfig[] memory config = new  IDepth.DepthConfig[](4);
-        for (uint256 i = 0; i < 4; i++) {
-            config[i] = IDepth.DepthConfig({side: IDepth.Side.Lower, amountInToken0: false, exact: false});
-        }
-
-        uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
-        uint256[4] memory offchainCalculations = [
-            uint256(5053536986492639903744),
-            uint256(10088205745527348789248),
-            uint256(20101406051205610733568),
-            uint256(39906473874246514769920)
-        ];
-
-        bool truth = true;
-        for (uint256 i = 0; i < offchainCalculations.length; i++) {
-            // test if our floating point calculations is within lower bound of floating point arithmetic
-            truth = truth && (evalulatePct(depthsMultiple[i], offchainCalculations[i]) < toleranceTrue);
-        }
-
-        assertEq(truth, true);
+        return (feeIdx, depthIdx);
     }
 
-    function testExactDepthsToken1() public {
-        // testing against theoretical depth calculations from off-chain
-        // liquidityLow = 4050408317414413260938526 or liquidity from ticks [-500, 0] U [50, 500]
-        // liquidityHigh = 44102429116372312781543825 or liquidity from ticks [0, 50]
-        //
-        // .025% depth = 5066178739934128504832
-        // 5066178739934128504832 = (sqrt(1) - sqrt(1 - .0025)) * liquidityLow
-        //
-        // .05% depth = 10138710062577439735808
-        // 10138710062577439735808 = (sqrt(1) - sqrt(1 - .005)) * liquidityLow
-        //
-        // 1% depth = 20302926434909349216256
-        // 20302926434909349216256 = (sqrt(1) - sqrt(1 - .01)) * liquidityLow
+    /// forge-config: default.fuzz.runs = 200
+    function testTokenBoth(
+        PositionDelta memory delta1,
+        PositionDelta memory delta2,
+        bool token0,
+        uint8 feeIdx,
+        uint8 depthIdx
+    ) public {
+        (feeIdx, depthIdx) = truncateSearchSpace(feeIdx, depthIdx);
 
-        // 2% depth = 40708654469037168787456
-        // 40708654469037168787456 = (sqrt(1) - sqrt(1 - .02)) * liquidityLow
-        // .025%, .05%, 1%, 2%
-        uint256[] memory depths = new uint256[](4);
-        uint256[4] memory depthsValues = [
-            uint256(79327135897655778240513441792),
-            uint256(79425985949584623951891398656),
-            uint256(79623317895830908422001262592),
-            uint256(80016521857016597127997947904)
-        ];
-
-        for (uint256 i = 0; i < 4; i++) {
-            depths[i] = depthsValues[i];
-        }
-
-        IDepth.DepthConfig[] memory config = new  IDepth.DepthConfig[](4);
-        for (uint256 i = 0; i < 4; i++) {
-            config[i] = IDepth.DepthConfig({side: IDepth.Side.Lower, amountInToken0: false, exact: true});
-        }
-
-        uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
-        uint256[4] memory offchainCalculations = [
-            uint256(5066178739934128504832),
-            uint256(10138710062577439735808),
-            uint256(20302926434909349216256),
-            uint256(40708654469037168787456)
-        ];
-
-        bool truth = true;
-        for (uint256 i = 0; i < offchainCalculations.length; i++) {
-            // test if our floating point calculations is within lower bound of floating point arithmetic + error for series approximation
-            truth = truth && (evalulatePct(depthsMultiple[i], offchainCalculations[i]) < toleranceApprox);
-        }
-
-        assertEq(truth, true);
+        runTest(delta1, delta2, token0, IDepth.Side.Both, depthIdx, feeIdx);
     }
 
-    function testExactDepthsToken0() public {
-        // exact has no impact on price movement upward calculations
-        // .025%, .05%, 1%, 2%
-        uint256[] memory depths = new uint256[](4);
-        uint256[4] memory depthsValues = [
-            uint256(79327135897655778240513441792),
-            uint256(79425985949584623951891398656),
-            uint256(79623317895830908422001262592),
-            uint256(80016521857016597127997947904)
-        ];
+    /// forge-config: default.fuzz.runs = 200
+    function testTokenLower(
+        PositionDelta memory delta1,
+        PositionDelta memory delta2,
+        bool token0,
+        uint8 feeIdx,
+        uint8 depthIdx
+    ) public {
+        (feeIdx, depthIdx) = truncateSearchSpace(feeIdx, depthIdx);
 
-        for (uint256 i = 0; i < 4; i++) {
-            depths[i] = depthsValues[i];
-        }
-
-        IDepth.DepthConfig[] memory configExact = new  IDepth.DepthConfig[](4);
-        for (uint256 i = 0; i < 4; i++) {
-            configExact[i] = IDepth.DepthConfig({side: IDepth.Side.Upper, amountInToken0: true, exact: true});
-        }
-
-        IDepth.DepthConfig[] memory config = new  IDepth.DepthConfig[](4);
-        for (uint256 i = 0; i < 4; i++) {
-            config[i] = IDepth.DepthConfig({side: IDepth.Side.Upper, amountInToken0: true, exact: false});
-        }
-
-        uint256[] memory depthsExactMultiple = depth.calculateDepths(poolAddress, depths, configExact);
-        uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
-
-        assertEq(depthsExactMultiple, depthsMultiple);
+        runTest(delta1, delta2, token0, IDepth.Side.Lower, depthIdx, feeIdx);
     }
 
-    function testDepthsToken1Both() public {
-        // testing against theoretical depth calculations from off-chain
-        // liquidityLow = 4050408317414413260938526 or liquidity from ticks [-500, 0] U [50, 500]
-        // liquidityHigh = 44102429116372312781543825 or liquidity from ticks [0, 50]
-        //
-        // 2% depth = 180460337100921740722176
-        // 180460337100921740722176 = ((sqrt(1.0001 ** 0) - sqrt(1 / (1 + .02))) * liquidityLow) + ((sqrt(1.0001 ** 50) - sqrt(1.0001 ** 0)) * liquidityHigh) + ((sqrt(1 + .02) - sqrt(1.0001 ** 50)) * liquidityLow)
-        uint256[] memory depths = new uint256[](1);
-        uint256[1] memory depthsValues = [uint256(80016521857016597127997947904)];
+    /// forge-config: default.fuzz.runs = 200
+    function testTokenUpper(
+        PositionDelta memory delta1,
+        PositionDelta memory delta2,
+        bool token0,
+        uint8 feeIdx,
+        uint8 depthIdx
+    ) public {
+        (feeIdx, depthIdx) = truncateSearchSpace(feeIdx, depthIdx);
 
-        for (uint256 i = 0; i < depthsValues.length; i++) {
-            depths[i] = depthsValues[i];
-        }
-
-        IDepth.DepthConfig[] memory config = new IDepth.DepthConfig[](1);
-        for (uint256 i = 0; i < config.length; i++) {
-            config[i] = IDepth.DepthConfig({side: IDepth.Side.Both, amountInToken0: false, exact: false});
-        }
-
-        uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
-        uint256[1] memory offchainCalculations = [uint256(180460337100921740722176)];
-
-        bool truth;
-        for (uint256 i = 0; i < offchainCalculations.length; i++) {
-            // test if our floating point calculations is within lower bound of floating point arithmetic
-            truth = (evalulatePct(depthsMultiple[i], offchainCalculations[i]) < toleranceTrue);
-        }
-
-        assertEq(truth, true);
-    }
-
-    function testExactDepthsToken1Both() public {
-        // testing against theoretical depth calculations from off-chain
-        // liquidityLow = 4050408317414413260938526 or liquidity from ticks [-500, 0] U [50, 500]
-        // liquidityHigh = 44102429116372312781543825 or liquidity from ticks [0, 50]
-        //
-        // 2% depth = 181262517695712386351104
-        // 181262517695712386351104 = ((sqrt(1.0001 ** 0) - sqrt(1 - .02)) * liquidityLow) + ((sqrt(1.0001 ** 50) - sqrt(1.0001 ** 0)) * liquidityHigh) + ((sqrt(1 + .02) - sqrt(1.0001 ** 50)) * liquidityLow)
-        uint256[] memory depths = new uint256[](1);
-        uint256[1] memory depthsValues = [uint256(80016521857016597127997947904)];
-
-        for (uint256 i = 0; i < depthsValues.length; i++) {
-            depths[i] = depthsValues[i];
-        }
-
-        IDepth.DepthConfig[] memory config = new IDepth.DepthConfig[](1);
-        for (uint256 i = 0; i < config.length; i++) {
-            config[i] = IDepth.DepthConfig({side: IDepth.Side.Both, amountInToken0: false, exact: true});
-        }
-
-        uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
-        uint256[1] memory offchainCalculations = [uint256(181262517695712386351104)];
-
-        bool truth;
-        for (uint256 i = 0; i < offchainCalculations.length; i++) {
-            // test if our floating point calculations is within lower bound of floating point arithmetic + error for series approximation
-            truth = (evalulatePct(depthsMultiple[i], offchainCalculations[i]) < toleranceApprox);
-            if (!truth) {
-                console.log("miss");
-                console.log(depthsMultiple[i]);
-                console.log(offchainCalculations[i]);
-            }
-        }
-
-        assertEq(truth, true);
-    }
-
-    function testDepthsToken0Both() public {
-        // testing against theoretical depth calculations from off-chain
-        // liquidityLow = 4050408317414413260938526 or liquidity from ticks [-500, 0] U [50, 500]
-        // liquidityHigh = 44102429116372312781543825 or liquidity from ticks [0, 50]
-        //
-        // 2% depth = 180460337100921740722176
-        // 180460337100921740722176 = ((sqrt(1.0001 ** 0) - sqrt(1 / (1 + .02))) * liquidityLow) + ((sqrt(1.0001 ** 50) - sqrt(1.0001 ** 0)) * liquidityHigh) + ((sqrt(1 + .02) - sqrt(1.0001 ** 50)) * liquidityLow)
-        uint256[] memory depths = new uint256[](1);
-        uint256[1] memory depthsValues = [uint256(80016521857016597127997947904)];
-
-        for (uint256 i = 0; i < depthsValues.length; i++) {
-            depths[i] = depthsValues[i];
-        }
-
-        IDepth.DepthConfig[] memory config = new IDepth.DepthConfig[](1);
-        for (uint256 i = 0; i < config.length; i++) {
-            config[i] = IDepth.DepthConfig({side: IDepth.Side.Both, amountInToken0: true, exact: false});
-        }
-
-        uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
-        uint256[1] memory offchainCalculations = [uint256(180210036870795216551936)];
-
-        bool truth;
-        for (uint256 i = 0; i < offchainCalculations.length; i++) {
-            // test if our floating point calculations is within lower bound of floating point arithmetic
-            truth = (evalulatePct(depthsMultiple[i], offchainCalculations[i]) < toleranceTrue);
-            if (!truth) {
-                console.log("miss");
-                console.log(depthsMultiple[i]);
-                console.log(offchainCalculations[i]);
-            }
-        }
-
-        assertEq(truth, true);
-    }
-
-    function testExactDepthsToken0Both() public {
-        // testing against theoretical depth calculations from off-chain
-        // liquidityLow = 4050408317414413260938526 or liquidity from ticks [-500, 0] U [50, 500]
-        // liquidityHigh = 44102429116372312781543825 or liquidity from ticks [0, 50]
-        //
-        // 2% depth = 180460337100921740722176
-        // 180460337100921740722176 = ((sqrt(1.0001 ** 0) - sqrt(1 / (1 + .02))) * liquidityLow) + ((sqrt(1.0001 ** 50) - sqrt(1.0001 ** 0)) * liquidityHigh) + ((sqrt(1 + .02) - sqrt(1.0001 ** 50)) * liquidityLow)
-        uint256[] memory depths = new uint256[](1);
-        uint256[1] memory depthsValues = [uint256(80016521857016597127997947904)];
-
-        for (uint256 i = 0; i < depthsValues.length; i++) {
-            depths[i] = depthsValues[i];
-        }
-
-        IDepth.DepthConfig[] memory config = new IDepth.DepthConfig[](1);
-        for (uint256 i = 0; i < config.length; i++) {
-            config[i] = IDepth.DepthConfig({side: IDepth.Side.Both, amountInToken0: true, exact: true});
-        }
-
-        uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
-        uint256[1] memory offchainCalculations = [uint256(181028424771432853012480)];
-
-        bool truth;
-        for (uint256 i = 0; i < offchainCalculations.length; i++) {
-            // test if our floating point calculations is within lower bound of floating point arithmetic + error for series approximation
-            truth = (evalulatePct(depthsMultiple[i], offchainCalculations[i]) < toleranceApprox);
-            if (!truth) {
-                console.log(depthsMultiple[i]);
-                console.log(offchainCalculations[i]);
-            }
-        }
-
-        assertEq(truth, true);
-    }
-
-    function testLengthMismatchReversion() public {
-        uint256[] memory depths = new uint256[](1);
-        uint256[1] memory depthsValues = [uint256(80016521857016597127997947904)];
-
-        for (uint256 i = 0; i < depthsValues.length; i++) {
-            depths[i] = depthsValues[i];
-        }
-
-        IDepth.DepthConfig[] memory config = new IDepth.DepthConfig[](2);
-        for (uint256 i = 0; i < config.length; i++) {
-            config[i] = IDepth.DepthConfig({side: IDepth.Side.Upper, amountInToken0: false, exact: false});
-        }
-
-        vm.expectRevert("LengthMismatch");
-        uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
-    }
-
-    function testExceededMaxDepthReversion() public {
-        uint256[] memory depths = new uint256[](1);
-        uint256[1] memory depthsValues = [uint256(112045541949572287496682733568)];
-
-        for (uint256 i = 0; i < depthsValues.length; i++) {
-            depths[i] = depthsValues[i];
-        }
-
-        IDepth.DepthConfig[] memory config = new IDepth.DepthConfig[](1);
-        for (uint256 i = 0; i < config.length; i++) {
-            config[i] = IDepth.DepthConfig({side: IDepth.Side.Both, amountInToken0: true, exact: true});
-        }
-
-        vm.expectRevert("ExceededMaxDepth");
-        uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
+        runTest(delta1, delta2, token0, IDepth.Side.Upper, depthIdx, feeIdx);
     }
 }

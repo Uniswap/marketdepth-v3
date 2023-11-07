@@ -9,6 +9,7 @@ import {SqrtPriceMath} from "v3-core/contracts/libraries/SqrtPriceMath.sol";
 import {LiquidityMath} from "v3-core/contracts/libraries/LiquidityMath.sol";
 import {IDepth} from "./IDepth.sol";
 import {PoolTickBitmap} from "./PoolTickBitmap.sol";
+import {FixedPoint96} from "v3-core/contracts/libraries/FixedPoint96.sol";
 
 contract Depth is IDepth {
     function calculateDepths(address pool, uint256[] memory sqrtDepthX96, DepthConfig[] memory configs)
@@ -43,8 +44,31 @@ contract Depth is IDepth {
                 PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick, !upper);
         }
 
+        // we most likely hit the end of the word that we are in - we need to know if there is another word that
+        // we can move into
         if (!initialized) {
-            tickNext = upper ? TickMath.MAX_TICK : TickMath.MIN_TICK;
+            // it is possible the pool is rounding down and finding the current tick which is uninitialized
+            // this happens if the pool was either
+            // 1. initialzied at a tick that does not have liquidity
+            // 2. moved to a tick then liquidity was burned.
+            // v3 deals with this by checking the direction the pool is moving and then iterating
+            // before finding the next tick
+            // to avoid overshooting, instead of just sending down, we check if the tick is initialized first
+            // and then we check if there is a tick lower that is still initialized
+            // this means we remove a redundant call. v3 also needs to do this for cacheing fee values
+            // which we do not care about
+            if (tickNext == poolVariables.tick) {
+                (tickNext, initialized) =
+                    PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick - 1, !upper);
+            }
+
+            // if we hit the end of the word that we are in and there is no shift, then there are no initialized
+            // ticks within 256 tick spacings
+            if (!initialized) {
+                // the tick bitmap searches within 256 tick spacings, so assume that there exists a tick
+                // initialized outside of that range - this functionally does not matter if depth under 2%
+                tickNext = upper ? tick + (type(uint8).max - 1) * poolVariables.tickSpacing : tick - (type(uint8).max - 1) * poolVariables.tickSpacing;
+            }
         }
     }
 
@@ -76,10 +100,10 @@ contract Depth is IDepth {
 
         if (upper) {
             direction = int24(1);
-            sqrtPriceX96Tgt = uint160(FullMath.mulDiv(poolVariables.sqrtPriceX96, sqrtDepthX96, 1 << 96));
+            sqrtPriceX96Tgt = uint160(FullMath.mulDiv(poolVariables.sqrtPriceX96, sqrtDepthX96, FixedPoint96.Q96));
             require(poolVariables.sqrtPriceX96 <= sqrtPriceX96Tgt, "UpperboundOverflow");
         } else {
-            sqrtPriceX96Tgt = uint160(FullMath.mulDiv(poolVariables.sqrtPriceX96, 1 << 96, sqrtDepthX96));
+            sqrtPriceX96Tgt = uint160(FullMath.mulDiv(poolVariables.sqrtPriceX96, FixedPoint96.Q96, sqrtDepthX96));
             if (config.exact) {
                 // we want to calculate deflator = (1-p)^2 / 2 to approximate (1-p) instead of 1/(1+p)
                 // because 1 / (1 + p) * price * (1-deflator) = (1-p) * price
@@ -88,9 +112,9 @@ contract Depth is IDepth {
                 // 112045541949572287496682733568 = sqrt(2) * 2^96, which breaks this code/deflation
                 require(sqrtDepthX96 < 112045541949572287496682733568, "ExceededMaxDepth");
 
-                uint256 deflator = (sqrtDepthX96 * sqrtDepthX96 - (4 * (1 << 96)) - (1 << 192)) / (1 << 96);
+                uint256 deflator = (sqrtDepthX96 * sqrtDepthX96 - (4 * (FixedPoint96.Q96)) - (FixedPoint96.Q96 * FixedPoint96.Q96)) / (FixedPoint96.Q96);
                 sqrtPriceX96Tgt =
-                    uint160(FullMath.mulDiv(sqrtPriceX96Tgt, ((1 << 192) - (deflator * deflator) / 2), 1 << 192));
+                    uint160(FullMath.mulDiv(sqrtPriceX96Tgt, ((FixedPoint96.Q96 * FixedPoint96.Q96) - (deflator * deflator) / 2), FixedPoint96.Q96 * FixedPoint96.Q96));
             }
             direction = int24(-1);
         }
@@ -113,16 +137,22 @@ contract Depth is IDepth {
             // then the loop above breaks
             if (upper ? sqrtPriceRatioNext > sqrtPriceX96Tgt : sqrtPriceRatioNext < sqrtPriceX96Tgt) {
                 sqrtPriceRatioNext = sqrtPriceX96Tgt;
-                tokenAmt += config.amountInToken0
-                    ? SqrtPriceMath.getAmount0Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false)
-                    : SqrtPriceMath.getAmount1Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false);
+
+                // we need to check this as these functions require liquidity > 0
+                if (liquiditySpot != 0) {
+                    tokenAmt += config.amountInToken0
+                        ? SqrtPriceMath.getAmount0Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false)
+                        : SqrtPriceMath.getAmount1Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false);
+                }
                 break;
             }
 
-            tokenAmt += config.amountInToken0
-                ? SqrtPriceMath.getAmount0Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false)
-                : SqrtPriceMath.getAmount1Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false);
-
+            // we need to check this as these functions require liquidity > 0
+            if (liquiditySpot != 0) {
+                tokenAmt += config.amountInToken0
+                    ? SqrtPriceMath.getAmount0Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false)
+                    : SqrtPriceMath.getAmount1Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false);
+            }
             // find the amount of liquidity to shift before we calculate the next tick
             // kick out or add in the liquidiy that we are moving
             (, liquidityNet,,,,,,) = IUniswapV3Pool(poolVariables.pool).ticks(tickNext);
