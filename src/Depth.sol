@@ -10,8 +10,11 @@ import {LiquidityMath} from "v3-core/contracts/libraries/LiquidityMath.sol";
 import {IDepth} from "./IDepth.sol";
 import {PoolTickBitmap} from "./PoolTickBitmap.sol";
 import {FixedPoint96} from "v3-core/contracts/libraries/FixedPoint96.sol";
+import {DepthLibrary} from "./DepthLibrary.sol";
 
 contract Depth is IDepth {
+    using DepthLibrary for IDepth.DepthConfig;
+
     function calculateDepths(address pool, uint256[] memory sqrtDepthX96, DepthConfig[] memory configs)
         external
         view
@@ -21,12 +24,96 @@ contract Depth is IDepth {
         require(sqrtDepthX96.length == configs.length, "LengthMismatch");
         amounts = new uint256[](sqrtDepthX96.length);
 
-        IDepth.PoolVariables memory poolVariables = initializePoolVariables(pool);
+        IDepth.PoolVariables memory poolVariables = _initializePoolVariables(pool);
 
         for (uint256 i = 0; i < sqrtDepthX96.length; i++) {
             amounts[i] = _calculateDepth(poolVariables, configs[i], sqrtDepthX96[i]);
         }
         return amounts;
+    }
+
+    function _calculateDepth(PoolVariables memory poolVariables, DepthConfig memory config, uint256 sqrtDepthX96)
+        internal
+        view
+        returns (uint256 returnAmt)
+    {
+        if (config.side == Side.Both) {
+            config.side = Side.Upper;
+            returnAmt += calculateOneSide(poolVariables, config, sqrtDepthX96);
+            config.side = Side.Lower;
+            returnAmt += calculateOneSide(poolVariables, config, sqrtDepthX96);
+        } else {
+            returnAmt += calculateOneSide(poolVariables, config, sqrtDepthX96);
+        }
+
+        return returnAmt;
+    }
+
+    function calculateOneSide(PoolVariables memory poolVariables, DepthConfig memory config, uint256 sqrtDepthX96)
+        internal
+        view
+        returns (uint256 amount)
+    {
+        bool upper = config.side == Side.Upper;
+
+        // Prep step variables.
+        uint160 sqrtPriceX96Current = poolVariables.sqrtPriceX96;
+        uint160 sqrtPriceX96Tgt = config.getSqrtPriceX96Tgt(poolVariables.sqrtPriceX96, sqrtDepthX96);
+
+        uint128 liquidityCurrent = poolVariables.liquidity;
+        int24 tickNext = _findNextTick(poolVariables, poolVariables.tick, upper, true);
+        uint160 sqrtPriceX96Next = TickMath.getSqrtRatioAtTick(tickNext);
+
+        while (upper ? sqrtPriceX96Current < sqrtPriceX96Tgt : sqrtPriceX96Tgt < sqrtPriceX96Current) {
+            // If we calculated a next price that is past the target we can calculate the amount directly to the target and break.
+            if (upper ? sqrtPriceX96Next > sqrtPriceX96Tgt : sqrtPriceX96Next < sqrtPriceX96Tgt) {
+                amount +=
+                    _getAmountToNextPrice(config.amountInToken0, sqrtPriceX96Current, sqrtPriceX96Tgt, liquidityCurrent);
+                break;
+            }
+
+            amount +=
+                _getAmountToNextPrice(config.amountInToken0, sqrtPriceX96Current, sqrtPriceX96Next, liquidityCurrent);
+
+            // Update the state variables.
+            // First, we need liquidity net to calculate the liquidity spot.
+            (, int128 liquidityNet,,,,,,) = IUniswapV3Pool(poolVariables.pool).ticks(tickNext);
+            if (!upper) {
+                liquidityNet = -liquidityNet;
+            }
+            liquidityCurrent = LiquidityMath.addDelta(liquidityCurrent, liquidityNet);
+            tickNext = _findNextTick(poolVariables, tickNext, upper, false);
+            sqrtPriceX96Next = TickMath.getSqrtRatioAtTick(tickNext);
+        }
+    }
+
+    function _initializePoolVariables(address poolAddress) internal view returns (PoolVariables memory poolVariables) {
+        IUniswapV3Pool pool = IUniswapV3Pool(poolAddress);
+
+        (uint160 sqrtPriceX96, int24 tick,,,,,) = pool.slot0();
+
+        poolVariables = IDepth.PoolVariables({
+            tick: tick,
+            tickSpacing: pool.tickSpacing(),
+            liquidity: pool.liquidity(),
+            sqrtPriceX96: sqrtPriceX96,
+            pool: poolAddress
+        });
+    }
+
+    function _getAmountToNextPrice(
+        bool amountInToken0,
+        uint160 sqrtPriceX96Current,
+        uint160 sqrtPriceX96Next,
+        uint128 liquidityCurrent
+    ) internal pure returns (uint256 amount) {
+        if (liquidityCurrent != 0) {
+            if (amountInToken0) {
+                amount = SqrtPriceMath.getAmount0Delta(sqrtPriceX96Current, sqrtPriceX96Next, liquidityCurrent, false);
+            } else {
+                amount = SqrtPriceMath.getAmount1Delta(sqrtPriceX96Current, sqrtPriceX96Next, liquidityCurrent, false);
+            }
+        }
     }
 
     function _findNextTick(PoolVariables memory poolVariables, int24 tick, bool upper, bool lte)
@@ -67,122 +154,10 @@ contract Depth is IDepth {
             if (!initialized) {
                 // the tick bitmap searches within 256 tick spacings, so assume that there exists a tick
                 // initialized outside of that range - this functionally does not matter if depth under 2%
-                tickNext = upper ? tick + (type(uint8).max - 1) * poolVariables.tickSpacing : tick - (type(uint8).max - 1) * poolVariables.tickSpacing;
+                tickNext = upper
+                    ? tick + (type(uint8).max - 1) * poolVariables.tickSpacing
+                    : tick - (type(uint8).max - 1) * poolVariables.tickSpacing;
             }
         }
-    }
-
-    function _calculateDepth(PoolVariables memory poolVariables, DepthConfig memory config, uint256 sqrtDepthX96)
-        internal
-        view
-        returns (uint256)
-    {
-        uint256 returnAmt = 0;
-
-        if (config.side == Side.Both) {
-            returnAmt += calculateOneSide(poolVariables, config, sqrtDepthX96, true);
-            returnAmt += calculateOneSide(poolVariables, config, sqrtDepthX96, false);
-        } else {
-            returnAmt += calculateOneSide(poolVariables, config, sqrtDepthX96, config.side == Side.Upper ? true : false);
-        }
-
-        return returnAmt;
-    }
-
-    function calculateOneSide(
-        PoolVariables memory poolVariables,
-        DepthConfig memory config,
-        uint256 sqrtDepthX96,
-        bool upper
-    ) internal view returns (uint256) {
-        int24 direction;
-        uint160 sqrtPriceX96Tgt;
-
-        if (upper) {
-            direction = int24(1);
-            sqrtPriceX96Tgt = uint160(FullMath.mulDiv(poolVariables.sqrtPriceX96, sqrtDepthX96, FixedPoint96.Q96));
-            require(poolVariables.sqrtPriceX96 <= sqrtPriceX96Tgt, "UpperboundOverflow");
-        } else {
-            sqrtPriceX96Tgt = uint160(FullMath.mulDiv(poolVariables.sqrtPriceX96, FixedPoint96.Q96, sqrtDepthX96));
-            if (config.exact) {
-                // we want to calculate deflator = (1-p)^2 / 2 to approximate (1-p) instead of 1/(1+p)
-                // because 1 / (1 + p) * price * (1-deflator) = (1-p) * price
-                // this is because of the taylor series expansion of these values
-                // however we need to keep everything in integers, so we cannot directly calculate sqrt(1-p)
-                // 112045541949572287496682733568 = sqrt(2) * 2^96, which breaks this code/deflation
-                require(sqrtDepthX96 < 112045541949572287496682733568, "ExceededMaxDepth");
-
-                uint256 deflator = (sqrtDepthX96 * sqrtDepthX96 - (4 * (FixedPoint96.Q96)) - (FixedPoint96.Q96 * FixedPoint96.Q96)) / (FixedPoint96.Q96);
-                sqrtPriceX96Tgt =
-                    uint160(FullMath.mulDiv(sqrtPriceX96Tgt, ((FixedPoint96.Q96 * FixedPoint96.Q96) - (deflator * deflator) / 2), FixedPoint96.Q96 * FixedPoint96.Q96));
-            }
-            direction = int24(-1);
-        }
-
-        int24 tickNext = _findNextTick(poolVariables, poolVariables.tick, upper, true);
-
-        uint160 sqrtPriceX96Current = poolVariables.sqrtPriceX96;
-        uint128 liquiditySpot = poolVariables.liquidity;
-        int128 liquidityNet;
-        uint256 tokenAmt;
-        uint160 sqrtPriceRatioNext;
-
-        // we are going to find the sqrtPriceX96Tgt that we want to find
-        // however we also don't want to overshoot it
-        // here we are looking to see if we are equal to the sqrtPriceX96Tgt
-        while (upper ? sqrtPriceX96Current < sqrtPriceX96Tgt : sqrtPriceX96Current > sqrtPriceX96Tgt) {
-            sqrtPriceRatioNext = TickMath.getSqrtRatioAtTick(tickNext);
-
-            // here we are checking if we blew past the target, and then if we did, we set it to the value we are searching for
-            // then the loop above breaks
-            if (upper ? sqrtPriceRatioNext > sqrtPriceX96Tgt : sqrtPriceRatioNext < sqrtPriceX96Tgt) {
-                sqrtPriceRatioNext = sqrtPriceX96Tgt;
-
-                // we need to check this as these functions require liquidity > 0
-                if (liquiditySpot != 0) {
-                    tokenAmt += config.amountInToken0
-                        ? SqrtPriceMath.getAmount0Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false)
-                        : SqrtPriceMath.getAmount1Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false);
-                }
-                break;
-            }
-
-            // we need to check this as these functions require liquidity > 0
-            if (liquiditySpot != 0) {
-                tokenAmt += config.amountInToken0
-                    ? SqrtPriceMath.getAmount0Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false)
-                    : SqrtPriceMath.getAmount1Delta(sqrtPriceX96Current, sqrtPriceRatioNext, liquiditySpot, false);
-            }
-            // find the amount of liquidity to shift before we calculate the next tick
-            // kick out or add in the liquidiy that we are moving
-            (, liquidityNet,,,,,,) = IUniswapV3Pool(poolVariables.pool).ticks(tickNext);
-
-            // liquidityNet is added to the spot when going left to right (upper)
-            // liquidityNet is subtracted to the spot when going right to left (lower)
-            liquidityNet = liquidityNet * direction;
-            liquiditySpot = LiquidityMath.addDelta(liquiditySpot, liquidityNet);
-
-            // find what tick we will be shifting to
-            // shift the range
-            tickNext = _findNextTick(poolVariables, tickNext, upper, false);
-            sqrtPriceX96Current = sqrtPriceRatioNext;
-        }
-        return tokenAmt;
-    }
-
-    function initializePoolVariables(address poolAddress) internal view returns (PoolVariables memory poolVariables) {
-        IUniswapV3Pool pool = IUniswapV3Pool(poolAddress);
-
-        int24 tick;
-        uint160 sqrtPriceX96;
-        (sqrtPriceX96, tick,,,,,) = pool.slot0();
-
-        poolVariables = IDepth.PoolVariables({
-            tick: tick,
-            tickSpacing: pool.tickSpacing(),
-            liquidity: pool.liquidity(),
-            sqrtPriceX96: sqrtPriceX96,
-            pool: poolAddress
-        });
     }
 }
