@@ -83,6 +83,10 @@ contract Depth is IDepth {
             }
             liquidityCurrent = LiquidityMath.addDelta(liquidityCurrent, liquidityNet);
             tickNext = _findNextTick(poolVariables, tickNext, upper, false);
+
+            // move the sqrtPriceCurrent to the end of the current bucket
+            // then move the sqrtPriceX96Next to the end of the next bucket
+            sqrtPriceX96Current = sqrtPriceX96Next;
             sqrtPriceX96Next = TickMath.getSqrtRatioAtTick(tickNext);
         }
     }
