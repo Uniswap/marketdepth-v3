@@ -61,7 +61,7 @@ contract Depth is IDepth {
         uint160 sqrtPriceX96Tgt = config.getSqrtPriceX96Tgt(poolVariables.sqrtPriceX96, sqrtDepthX96);
 
         uint128 liquidityCurrent = poolVariables.liquidity;
-        int24 tickNext = _findNextTick(poolVariables, poolVariables.tick, upper, true);
+        int24 tickNext = _findNextTick(poolVariables, poolVariables.tick, upper, sqrtPriceX96Tgt);
         uint160 sqrtPriceX96Next = TickMath.getSqrtRatioAtTick(tickNext);
 
         while (upper ? sqrtPriceX96Current < sqrtPriceX96Tgt : sqrtPriceX96Tgt < sqrtPriceX96Current) {
@@ -82,7 +82,7 @@ contract Depth is IDepth {
                 liquidityNet = -liquidityNet;
             }
             liquidityCurrent = LiquidityMath.addDelta(liquidityCurrent, liquidityNet);
-            tickNext = _findNextTick(poolVariables, tickNext, upper, false);
+            tickNext = _findNextTick(poolVariables, upper ? tickNext : tickNext - 1, upper, sqrtPriceX96Tgt);
 
             // move the sqrtPriceCurrent to the end of the current bucket
             // then move the sqrtPriceX96Next to the end of the next bucket
@@ -120,47 +120,43 @@ contract Depth is IDepth {
         }
     }
 
-    function _findNextTick(PoolVariables memory poolVariables, int24 tick, bool upper, bool lte)
+    function _findNextTick(PoolVariables memory poolVariables, int24 tick, bool upper, uint160 sqrtPriceX96Tgt)
         internal
         view
         returns (int24 tickNext)
     {
         bool initialized;
 
-        if (!lte) {
-            (tickNext, initialized) =
-                PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick - 1, !upper);
-        } else {
-            (tickNext, initialized) =
-                PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick, !upper);
-        }
-
+        (tickNext, initialized) =
+            PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, tick, !upper);
+        
         // we most likely hit the end of the word that we are in - we need to know if there is another word that
         // we can move into
         if (!initialized) {
-            // it is possible the pool is rounding down and finding the current tick which is uninitialized
-            // this happens if the pool was either
-            // 1. initialzied at a tick that does not have liquidity
-            // 2. moved to a tick then liquidity was burned.
-            // v3 deals with this by checking the direction the pool is moving and then iterating
-            // before finding the next tick
-            // to avoid overshooting, instead of just sending down, we check if the tick is initialized first
-            // and then we check if there is a tick lower that is still initialized
-            // this means we remove a redundant call. v3 also needs to do this for cacheing fee values
-            // which we do not care about
-            if (tickNext == poolVariables.tick) {
-                (tickNext, initialized) =
-                    PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick - 1, !upper);
+            // check outside the current tick range but inside the current 256 tick spacing bounds before calculating anything
+            (tickNext, initialized) =
+                        PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick - 1, !upper);
+
+            // we found a tick that is within 256 tick spacings
+            if (initialized) {
+                return tickNext;
             }
 
-            // if we hit the end of the word that we are in and there is no shift, then there are no initialized
-            // ticks within 256 tick spacings
-            if (!initialized) {
-                // the tick bitmap searches within 256 tick spacings, so assume that there exists a tick
-                // initialized outside of that range - this functionally does not matter if depth under 2%
-                tickNext = upper
-                    ? tick + (type(uint8).max - 1) * poolVariables.tickSpacing
-                    : tick - (type(uint8).max - 1) * poolVariables.tickSpacing;
+            // because this function the greatest tick that is below the target ratio, it is problematic if you are going up in price
+            // the getTickAtSqrtRatio is functionally rounding down the fractional part of the tick, but we want to round it up
+            // if we are going up (we can do this by adding 1)
+            // getTickAtSqrtRatio(tick) <= ratio
+            int24 tickMax = TickMath.getTickAtSqrtRatio(sqrtPriceX96Tgt);
+            if (upper) {
+                tickMax = tickMax + 1;
+            }
+
+            while (!initialized && upper ? tick <= tickMax : tick >= tickMax) {
+                tick = upper ? tick + 255 * poolVariables.tickSpacing 
+                             : tick - 255 * poolVariables.tickSpacing;
+
+                (tickNext, initialized) =
+                        PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, tick, !upper);
             }
         }
     }
