@@ -8,7 +8,6 @@ interface IDepth {
     // The side of the range you want the depth for, either lower, upper, or depth on both sides.
     enum Side {
         Lower,
-        LowerExact,
         Upper,
         Both // Both auto executes logic for depth on Side.Lower and Side.Upper.
     }
