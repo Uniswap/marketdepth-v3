@@ -127,15 +127,14 @@ contract Depth is IDepth {
     {
         bool initialized;
 
-        (tickNext, initialized) =
-            PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, tick, !upper);
-        
+        (tickNext, initialized) = PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, tick, !upper);
+
         // we most likely hit the end of the word that we are in - we need to know if there is another word that
         // we can move into
         if (!initialized) {
             // check outside the current tick range but inside the current 256 tick spacing bounds before calculating anything
             (tickNext, initialized) =
-                        PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick - 1, !upper);
+                PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick - 1, !upper);
 
             // we found a tick that is within 256 tick spacings
             if (initialized) {
@@ -152,11 +151,9 @@ contract Depth is IDepth {
             }
 
             while (!initialized && upper ? tick <= tickMax : tick >= tickMax) {
-                tick = upper ? tick + 255 * poolVariables.tickSpacing 
-                             : tick - 255 * poolVariables.tickSpacing;
+                tick = upper ? tick + 255 * poolVariables.tickSpacing : tick - 255 * poolVariables.tickSpacing;
 
-                (tickNext, initialized) =
-                        PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, tick, !upper);
+                (tickNext, initialized) = PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, tick, !upper);
             }
         }
     }
