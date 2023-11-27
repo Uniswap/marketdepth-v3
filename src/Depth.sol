@@ -14,6 +14,7 @@ import {DepthLibrary} from "./DepthLibrary.sol";
 
 contract Depth is IDepth {
     using DepthLibrary for IDepth.DepthConfig;
+    using PoolTickBitmap for IDepth.PoolVariables;
 
     function calculateDepths(address pool, uint256[] memory sqrtDepthX96, DepthConfig[] memory configs)
         external
@@ -61,7 +62,7 @@ contract Depth is IDepth {
         uint160 sqrtPriceX96Tgt = config.getSqrtPriceX96Tgt(poolVariables.sqrtPriceX96, sqrtDepthX96);
 
         uint128 liquidityCurrent = poolVariables.liquidity;
-        int24 tickNext = _findNextTick(poolVariables, poolVariables.tick, upper, true);
+        int24 tickNext = poolVariables.findNextTick(poolVariables.tick, upper, sqrtPriceX96Tgt);
         uint160 sqrtPriceX96Next = TickMath.getSqrtRatioAtTick(tickNext);
 
         while (upper ? sqrtPriceX96Current < sqrtPriceX96Tgt : sqrtPriceX96Tgt < sqrtPriceX96Current) {
@@ -80,9 +81,11 @@ contract Depth is IDepth {
             (, int128 liquidityNet,,,,,,) = IUniswapV3Pool(poolVariables.pool).ticks(tickNext);
             if (!upper) {
                 liquidityNet = -liquidityNet;
+                // If not going upper, always push tickNext to the next word because we are on a word boundary.
+                tickNext = tickNext - 1;
             }
             liquidityCurrent = LiquidityMath.addDelta(liquidityCurrent, liquidityNet);
-            tickNext = _findNextTick(poolVariables, tickNext, upper, false);
+            tickNext = poolVariables.findNextTick(tickNext, upper, sqrtPriceX96Tgt);
 
             // move the sqrtPriceCurrent to the end of the current bucket
             // then move the sqrtPriceX96Next to the end of the next bucket
@@ -116,51 +119,6 @@ contract Depth is IDepth {
                 amount = SqrtPriceMath.getAmount0Delta(sqrtPriceX96Current, sqrtPriceX96Next, liquidityCurrent, false);
             } else {
                 amount = SqrtPriceMath.getAmount1Delta(sqrtPriceX96Current, sqrtPriceX96Next, liquidityCurrent, false);
-            }
-        }
-    }
-
-    function _findNextTick(PoolVariables memory poolVariables, int24 tick, bool upper, bool lte)
-        internal
-        view
-        returns (int24 tickNext)
-    {
-        bool initialized;
-
-        if (!lte) {
-            (tickNext, initialized) =
-                PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick - 1, !upper);
-        } else {
-            (tickNext, initialized) =
-                PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick, !upper);
-        }
-
-        // we most likely hit the end of the word that we are in - we need to know if there is another word that
-        // we can move into
-        if (!initialized) {
-            // it is possible the pool is rounding down and finding the current tick which is uninitialized
-            // this happens if the pool was either
-            // 1. initialzied at a tick that does not have liquidity
-            // 2. moved to a tick then liquidity was burned.
-            // v3 deals with this by checking the direction the pool is moving and then iterating
-            // before finding the next tick
-            // to avoid overshooting, instead of just sending down, we check if the tick is initialized first
-            // and then we check if there is a tick lower that is still initialized
-            // this means we remove a redundant call. v3 also needs to do this for cacheing fee values
-            // which we do not care about
-            if (tickNext == poolVariables.tick) {
-                (tickNext, initialized) =
-                    PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick - 1, !upper);
-            }
-
-            // if we hit the end of the word that we are in and there is no shift, then there are no initialized
-            // ticks within 256 tick spacings
-            if (!initialized) {
-                // the tick bitmap searches within 256 tick spacings, so assume that there exists a tick
-                // initialized outside of that range - this functionally does not matter if depth under 2%
-                tickNext = upper
-                    ? tick + (type(uint8).max - 1) * poolVariables.tickSpacing
-                    : tick - (type(uint8).max - 1) * poolVariables.tickSpacing;
             }
         }
     }
