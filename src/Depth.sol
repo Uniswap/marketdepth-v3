@@ -132,23 +132,20 @@ contract Depth is IDepth {
         // we most likely hit the end of the word that we are in - we need to know if there is another word that
         // we can move into
         if (!initialized) {
-            // check outside the current tick range but inside the current 256 tick spacing bounds before calculating anything
-            (tickNext, initialized) =
-                PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, upper ? tick : tick - 1, !upper);
+            if (!upper) {
+                // check outside the current tick range but inside the current 256 tick spacing bounds before calculating anything
+                (tickNext, initialized) =
+                    PoolTickBitmap.nextInitializedTickWithinOneWord(poolVariables, tick - 1, !upper);
 
-            // we found a tick that is within 256 tick spacings
-            if (initialized) {
-                return tickNext;
+                // we found a tick that is within 256 tick spacings
+                if (initialized) return tickNext;
             }
 
             // because this function the greatest tick that is below the target ratio, it is problematic if you are going up in price
             // the getTickAtSqrtRatio is functionally rounding down the fractional part of the tick, but we want to round it up
             // if we are going up (we can do this by adding 1)
             // getTickAtSqrtRatio(tick) <= ratio
-            int24 tickMax = TickMath.getTickAtSqrtRatio(sqrtPriceX96Tgt);
-            if (upper) {
-                tickMax = tickMax + 1;
-            }
+            int24 tickMax = upper ? TickMath.getTickAtSqrtRatio(sqrtPriceX96Tgt) + 1 : TickMath.getTickAtSqrtRatio(sqrtPriceX96Tgt);
 
             while (!initialized && upper ? tick <= tickMax : tick >= tickMax) {
                 tick = upper ? tick + 255 * poolVariables.tickSpacing : tick - 255 * poolVariables.tickSpacing;
