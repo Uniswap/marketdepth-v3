@@ -2,7 +2,7 @@
 pragma solidity ^0.7.6;
 pragma abicoder v2;
 
-import "forge-std/Test.sol";
+import {Test, console, console2} from "forge-std/Test.sol";
 import "../src/MockToken.sol";
 import "v3-core/contracts/UniswapV3Factory.sol";
 import "v3-core/contracts/interfaces/IUniswapV3Factory.sol";
@@ -21,13 +21,15 @@ contract DepthTest is Test {
     IUniswapV3Factory v3Factory;
     IUniswapV3Pool pool;
 
-    // .25%, .5%, 1%, 2% depths
+    // .25%, .5%, 1%, 2%, 5%, 10% depths
     // sqrt(1+.0025) * Q96, sqrt(1+.005) * Q96, sqrt(1+.01) * Q96, sqrt(1+.02) * Q96,
-    uint256[4] depthsValues = [
+    uint256[6] depthsValues = [
         uint256(79327135897655778240513441792),
         uint256(79425985949584623951891398656),
         uint256(79623317895830908422001262592),
-        uint256(80016521857016597127997947904)
+        uint256(80016521857016597127997947904),
+        uint256(81184708056111256723576061952),
+        uint256(83095197869223164535776477184)
     ];
 
     // we do them in reverse order bc 100 bps is the most likely to fail vm.assume
@@ -36,8 +38,8 @@ contract DepthTest is Test {
     address me = vm.addr(0x1);
 
     struct PositionDelta {
-        int8 tickLower;
-        int8 tickUpper;
+        int16 tickLower;
+        int16 tickUpper;
         uint128 liquidityDelta;
     }
 
@@ -112,17 +114,25 @@ contract DepthTest is Test {
     }
 
     function checkPosition(PositionDelta memory delta) public returns (PositionDelta memory) {
-        // we need the position to not round down
+        // we need the position to not round down (due to FFI constraints)
         vm.assume(delta.liquidityDelta > 1e9);
 
         // make sure we don't overflow liquidity per tick
         vm.assume(delta.liquidityDelta < (pool.maxLiquidityPerTick() / 2));
 
         int24 tickSpacing = pool.tickSpacing();
+
+        // tick in our fuzzer are between -32,768 and 32,767 (int16)
+        // the max depth possible is ~(-1000, 1000), thus thus we truncate
+        // -32,768 / 32 = -1,024 and 32,767 // 32 = 1023, which are approx
+        // in our range for testing
+        delta.tickLower = int16(delta.tickLower) / int16(1 << 5);
+        delta.tickUpper = int16(delta.tickUpper) / int16(1 << 5);
+
         // we want to sufficiently randomize but the pool requires that the ticks
         // are on the tick spacing - so we push them to the closest
-        delta.tickLower = int8((int24(delta.tickLower) / tickSpacing) * tickSpacing);
-        delta.tickUpper = int8((int24(delta.tickUpper) / tickSpacing) * tickSpacing);
+        delta.tickLower = int16((int24(delta.tickLower) / tickSpacing) * tickSpacing);
+        delta.tickUpper = int16((int24(delta.tickUpper) / tickSpacing) * tickSpacing);
 
         // tick have to be at least 1 tick spacing apart to not break
         vm.assume(delta.tickLower != delta.tickUpper);
@@ -131,7 +141,9 @@ contract DepthTest is Test {
         if (delta.tickLower > delta.tickUpper) {
             (delta.tickLower, delta.tickUpper) = (delta.tickUpper, delta.tickLower);
         }
-        // it is possible that the positions
+        // the liquidity delta may not be on a grid, but this is highly dependent
+        // on the make up of the pool - we instead calculate the closet liquidity
+        // value that is on the grid and return it
         delta.liquidityDelta = createPosition(delta);
 
         return delta;
@@ -220,7 +232,13 @@ contract DepthTest is Test {
         uint256 resultsDiff = gtResult - ltResult;
 
         // assert solc/py result is at most off by 1/100th of a bip (aka one pip)
-        assertEq(resultsDiff * ONE_PIP / pyDepth, 0);
+        // or assert that it is at most 1 token off (due to integer rounding)
+        // 1 token is the smallest possible difference, but may be larger than 1 pip
+        if (resultsDiff == 1) {
+            assertEq(resultsDiff, 1);
+        } else {
+            assertEq(resultsDiff * ONE_PIP / pyDepth, 0);
+        }
     }
 
     function truncateSearchSpace(uint8 feeIdx, uint8 depthIdx) public pure returns (uint8, uint8) {
@@ -228,9 +246,11 @@ contract DepthTest is Test {
         // we truncate down from 2^8 by dividing by 84 which approx a max of 3 (we cant divide by 64) bc
         // need 4 numbers not 5
         feeIdx = feeIdx / 84;
-        depthIdx = depthIdx / 84;
         vm.assume(feeIdx <= 3);
-        vm.assume(depthIdx <= 3);
+
+        // we need 6 choices for the depth (256 / 51 is close to 5)
+        depthIdx = depthIdx / 51;
+        vm.assume(depthIdx <= 5);
 
         return (feeIdx, depthIdx);
     }
