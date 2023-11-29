@@ -123,9 +123,9 @@ contract DepthTest is Test {
         int24 tickSpacing = pool.tickSpacing();
 
         // tick in our fuzzer are between -32,768 and 32,767 (int16)
-        // the max depth possible is ~(-1000, 1000), thus thus we truncate
-        // -32,768 / 32 = -1,024 and 32,767 // 32 = 1023, which are approx
-        // in our range for testing
+        // the max depth that we are testing is ~(-1000, 1000), thus thus we 
+        // truncate to -32,768 / 32 = -1,024 and 32,767 // 32 = 1023, 
+        // which are approx in our range for testing
         delta.tickLower = int16(delta.tickLower) / int16(1 << 5);
         delta.tickUpper = int16(delta.tickUpper) / int16(1 << 5);
 
