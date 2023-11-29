@@ -16,8 +16,6 @@ interface IDepth {
         Side side;
         // Set to true for amount in token0, set to false for amount in token1
         bool amountInToken0;
-        // Set to true for the precise calculation.
-        bool exact;
     }
 
     struct PoolVariables {
@@ -33,7 +31,7 @@ interface IDepth {
     /// @param sqrtDepthX96 An array of depths to calculate
     /// @param configs An array of depth configuration for each depth calculation
     /// @return amounts The market depth of the pool with the requested depth and using the provided config
-    function calculateDepths(address pool, uint256[] memory sqrtDepthX96, DepthConfig[] memory configs)
+    function calculateDepths(address[] memory pool, uint256[] memory sqrtDepthX96, DepthConfig[] memory configs)
         external
         returns (uint256[] memory amounts);
 }

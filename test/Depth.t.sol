@@ -19,7 +19,6 @@ contract DepthTest is Test {
     address nftPosManagerAddress = 0xC36442b4a4522E871399CD717aBDD847Ab11FE88;
     INonfungiblePositionManager.MintParams mintParams;
     IUniswapV3Factory v3Factory;
-    IUniswapV3Pool pool;
 
     // .25%, .5%, 1%, 2% depths
     // sqrt(1+.0025) * Q96, sqrt(1+.005) * Q96, sqrt(1+.01) * Q96, sqrt(1+.02) * Q96,
@@ -41,6 +40,12 @@ contract DepthTest is Test {
         uint128 liquidityDelta;
     }
 
+    struct ConfigurationParameters {
+        bool amountInToken0;
+        uint8 depthIdx;
+        uint8 feeIdx;
+    }
+
     uint256 constant ONE_PIP = 1e6;
 
     function setUp() public {
@@ -53,17 +58,16 @@ contract DepthTest is Test {
         v3Factory = IUniswapV3Factory(0x1F98431c8aD98523631AE4a59f267346ea31F984);
     }
 
-    function setV3Pools(uint24 feeTier) public {
-        // deploy new tokens to create clean pools
+    function createV3Pool(uint24 feeTier) public returns (address poolAddress) {
+        // Deploy tokens and approve.
         MockToken token0 = new MockToken(me);
         MockToken token1 = new MockToken(me);
 
-        address poolAddress = v3Factory.createPool(address(token0), address(token1), feeTier);
-        pool = IUniswapV3Pool(poolAddress);
-        pool.initialize(1 << 96);
-
         token0.approve(address(nftPosManagerAddress), type(uint256).max);
         token1.approve(address(nftPosManagerAddress), type(uint256).max);
+
+        poolAddress = v3Factory.createPool(address(token0), address(token1), feeTier);
+        IUniswapV3Pool(poolAddress).initialize(1 << 96);
     }
 
     function sideToString(IDepth.Side side) public pure returns (string memory) {
@@ -90,28 +94,7 @@ contract DepthTest is Test {
         return token_type;
     }
 
-    function runDepthCalculation(address poolAddress, uint256 sqrtPriceRatioX96, bool amountInToken0, IDepth.Side side)
-        public
-        view
-        returns (uint256[] memory)
-    {
-        uint256[] memory depths = new uint256[](1);
-
-        for (uint256 i = 0; i < depths.length; i++) {
-            depths[i] = sqrtPriceRatioX96;
-        }
-
-        IDepth.DepthConfig[] memory config = new IDepth.DepthConfig[](1);
-        for (uint256 i = 0; i < depths.length; i++) {
-            config[i] = IDepth.DepthConfig({side: side, amountInToken0: amountInToken0, exact: false});
-        }
-
-        uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
-
-        return depthsMultiple;
-    }
-
-    function checkPosition(PositionDelta memory delta) public returns (PositionDelta memory) {
+    function checkPosition(IUniswapV3Pool pool, PositionDelta memory delta) public returns (PositionDelta memory) {
         // we need the position to not round down
         vm.assume(delta.liquidityDelta > 1e9);
 
@@ -132,12 +115,12 @@ contract DepthTest is Test {
             (delta.tickLower, delta.tickUpper) = (delta.tickUpper, delta.tickLower);
         }
         // it is possible that the positions
-        delta.liquidityDelta = createPosition(delta);
+        delta.liquidityDelta = createPosition(pool, delta);
 
         return delta;
     }
 
-    function createPosition(PositionDelta memory delta) public returns (uint128) {
+    function createPosition(IUniswapV3Pool pool, PositionDelta memory delta) public returns (uint128) {
         uint160 sqrtRatioAX96 = TickMath.getSqrtRatioAtTick(int24(delta.tickLower));
         uint160 sqrtRatioBX96 = TickMath.getSqrtRatioAtTick(int24(delta.tickUpper));
 
@@ -179,48 +162,64 @@ contract DepthTest is Test {
     function runTest(
         PositionDelta memory delta1,
         PositionDelta memory delta2,
-        bool token0,
         IDepth.Side side,
-        uint256 depthIdx,
-        uint256 feeIdx
+        ConfigurationParameters[] memory params
     ) public {
-        // set up the pools and try data
-        setV3Pools(feeTiers[feeIdx]);
-        delta1 = checkPosition(delta1);
-        delta2 = checkPosition(delta2);
+        address[] memory randomPools = new address[](params.length);
+        uint256[] memory randomDepthValues = new uint256[](params.length);
+        IDepth.DepthConfig[] memory randomDepthConfig = new IDepth.DepthConfig[](params.length);
+        for (uint256 i = 0; i < params.length; i++) {
+            ConfigurationParameters memory configParams = params[i];
+            randomPools[i] = createV3Pool(feeTiers[configParams.feeIdx]);
+            randomDepthValues[i] = depthsValues[configParams.depthIdx];
+            randomDepthConfig[i] = IDepth.DepthConfig({side: side, amountInToken0: configParams.amountInToken0});
+        }
 
-        // run the solidity contract
-        uint256 sqrtDepthX96 = depthsValues[depthIdx];
-
-        uint256[] memory solResults = runDepthCalculation(address(pool), sqrtDepthX96, token0, side);
-        uint256 solResult = solResults[0];
-
+        uint256[] memory solResults = depth.calculateDepths(randomPools, randomDepthValues, randomDepthConfig);
         // ffi cannot handle a return of 0
-        vm.assume(solResult > 0);
+        for (uint256 i = 0; i < solResults.length; i++) {
+            vm.assume(solResults[i] > 0);
+        }
+        uint256[] memory pyResults = calculateDepthsPython(delta1, delta2, side, params);
 
-        // create the string array to putting into ffi
-        string[] memory runPyInputs = new string[](8);
+        for (uint256 i = 0; i < params.length; i++) {
+            uint256 solDepth = solResults[i];
+            uint256 pyDepth = pyResults[i];
+            // check to see if the python returns within the floating point limit
+            (uint256 gtResult, uint256 ltResult) = pyDepth > solDepth ? (pyDepth, solDepth) : (solDepth, pyDepth);
+            uint256 resultsDiff = gtResult - ltResult;
 
-        // build ffi command string
-        runPyInputs[0] = "python3";
-        runPyInputs[1] = "python/calc.py";
-        runPyInputs[2] = garrisonMintParamsToString(delta1);
-        runPyInputs[3] = garrisonMintParamsToString(delta2);
-        runPyInputs[4] = tokenBooltoString(token0);
-        runPyInputs[5] = sideToString(side);
-        runPyInputs[6] = vm.toString(depthIdx); // sqrtDepthX96
-        runPyInputs[7] = vm.toString(feeIdx); // feeTier
+            // assert solc/py result is at most off by 1/100th of a bip (aka one pip)
+            assertEq(resultsDiff * ONE_PIP / pyDepth, 0);
+        }
+    }
 
-        // return the python result
-        bytes memory pythonResult = vm.ffi(runPyInputs);
-        uint256 pyDepth = abi.decode(pythonResult, (uint256));
+    function calculateDepthsPython(
+        PositionDelta memory delta1,
+        PositionDelta memory delta2,
+        IDepth.Side side,
+        ConfigurationParameters[] memory params
+    ) public returns (uint256[] memory pyResults) {
+        pyResults = new uint256[](params.length);
+        for (uint256 i = 0; i < params.length; i++) {
+            ConfigurationParameters memory configParams = params[i];
+            // Create python input command for this depth calculation.
+            string[] memory runPyInputs = new string[](8);
 
-        // check to see if the python returns within the floating point limit
-        (uint256 gtResult, uint256 ltResult) = pyDepth > solResult ? (pyDepth, solResult) : (solResult, pyDepth);
-        uint256 resultsDiff = gtResult - ltResult;
+            // build ffi command string
+            runPyInputs[0] = "python3";
+            runPyInputs[1] = "python/calc.py";
+            runPyInputs[2] = garrisonMintParamsToString(delta1);
+            runPyInputs[3] = garrisonMintParamsToString(delta2);
+            runPyInputs[4] = tokenBooltoString(configParams.amountInToken0);
+            runPyInputs[5] = sideToString(side);
+            runPyInputs[6] = vm.toString(uint256(configParams.depthIdx)); // sqrtDepthX96
+            runPyInputs[7] = vm.toString(uint256(configParams.feeIdx)); // feeTier
 
-        // assert solc/py result is at most off by 1/100th of a bip (aka one pip)
-        assertEq(resultsDiff * ONE_PIP / pyDepth, 0);
+            // return the python result
+            bytes memory pythonResult = vm.ffi(runPyInputs);
+            pyResults[i] = abi.decode(pythonResult, (uint256));
+        }
     }
 
     function truncateSearchSpace(uint8 feeIdx, uint8 depthIdx) public pure returns (uint8, uint8) {
@@ -239,38 +238,50 @@ contract DepthTest is Test {
     function testTokenBoth(
         PositionDelta memory delta1,
         PositionDelta memory delta2,
-        bool token0,
-        uint8 feeIdx,
-        uint8 depthIdx
+        ConfigurationParameters memory param
     ) public {
-        (feeIdx, depthIdx) = truncateSearchSpace(feeIdx, depthIdx);
+        ConfigurationParameters[] memory configParams = new ConfigurationParameters[](1);
 
-        runTest(delta1, delta2, token0, IDepth.Side.Both, depthIdx, feeIdx);
+        (uint8 feeIdx, uint8 depthIdx) = truncateSearchSpace(param.feeIdx, param.depthIdx);
+        param.depthIdx = depthIdx;
+        param.feeIdx = feeIdx;
+
+        configParams[0] = param;
+
+        runTest(delta1, delta2, IDepth.Side.Both, configParams);
     }
 
     /// forge-config: default.fuzz.runs = 200
     function testTokenLower(
         PositionDelta memory delta1,
         PositionDelta memory delta2,
-        bool token0,
-        uint8 feeIdx,
-        uint8 depthIdx
+        ConfigurationParameters memory param
     ) public {
-        (feeIdx, depthIdx) = truncateSearchSpace(feeIdx, depthIdx);
+        ConfigurationParameters[] memory configParams = new ConfigurationParameters[](1);
 
-        runTest(delta1, delta2, token0, IDepth.Side.Lower, depthIdx, feeIdx);
+        (uint8 feeIdx, uint8 depthIdx) = truncateSearchSpace(param.feeIdx, param.depthIdx);
+        param.depthIdx = depthIdx;
+        param.feeIdx = feeIdx;
+
+        configParams[0] = param;
+
+        runTest(delta1, delta2, IDepth.Side.Lower, configParams);
     }
 
     /// forge-config: default.fuzz.runs = 200
     function testTokenUpper(
         PositionDelta memory delta1,
         PositionDelta memory delta2,
-        bool token0,
-        uint8 feeIdx,
-        uint8 depthIdx
+        ConfigurationParameters memory param
     ) public {
-        (feeIdx, depthIdx) = truncateSearchSpace(feeIdx, depthIdx);
+        ConfigurationParameters[] memory configParams = new ConfigurationParameters[](1);
 
-        runTest(delta1, delta2, token0, IDepth.Side.Upper, depthIdx, feeIdx);
+        (uint8 feeIdx, uint8 depthIdx) = truncateSearchSpace(param.feeIdx, param.depthIdx);
+        param.depthIdx = depthIdx;
+        param.feeIdx = feeIdx;
+
+        configParams[0] = param;
+
+        runTest(delta1, delta2, IDepth.Side.Upper, configParams);
     }
 }
