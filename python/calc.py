@@ -17,9 +17,10 @@ def priceToToken1(priceLower, priceUpper, liquidity):
     
     return (liquidity * (sqrtPriceUpper - sqrtPriceLower))
 
-sqrtDepths = [.0025, .005, .01, .02]
+# immutables
+sqrtDepths = [.0025, .005, .01, .02, .05, .1]
 feeToTickSpacing = [200, 60, 10, 1]
-  
+MAX_TICK = 1024 # int16.max / int5.max = 1024  
 args = sys.argv
 
 # parse the command line arguments
@@ -36,8 +37,9 @@ depth = sqrtDepths[int(sqrtDepthX96Index)]
 ts = feeToTickSpacing[int(feeTierIdx)]
 
 # these are invariants currently in the system
-lower = 1
+lower = 1 # equiv to 1 << 96
 upper = 1
+MIN_TICK = -1 * MAX_TICK
 
 # apply the depths to the current price
 if direction == 'upper' or direction == 'both':
@@ -49,9 +51,14 @@ if direction == 'lower' or direction == 'both':
 # srry
 amtOut = 0
 
-# we know that the tick-spacing on the fuzzer is -256, 256
+
+# we need to put the iteration on the nearest possible tick spacings
+minIteration = (MIN_TICK // ts) * ts
+maxIteration = ((ts + MAX_TICK) // ts) * ts
+
+# we know that the tick-spacing on the fuzzer is -1024, 1024
 # we iterate just closer to that
-for tick in range(-300, 300 + 1, ts):
+for tick in range(minIteration, maxIteration + 1, ts):
     liquidity = 0
     
     if pos1[0] <= tick and tick < pos1[1]:

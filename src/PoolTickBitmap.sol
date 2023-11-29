@@ -10,8 +10,6 @@ import {TickMath} from "v3-core/contracts/libraries/TickMath.sol";
 /// @notice Stores a packed mapping of tick index to its initialized state
 /// @dev The mapping uses int16 for keys since ticks are represented as int24 and there are 256 (2^8) values per word.
 library PoolTickBitmap {
-    int24 constant TICK_WORD_LENGTH = 255;
-
     /// @notice Computes the position in the mapping where the initialized bit for a tick lives
     /// @param tick The tick for which to compute the position
     /// @return wordPos The key in the mapping containing the word in which the bit is stored
@@ -75,23 +73,13 @@ library PoolTickBitmap {
         bool initialized;
         (tickNext, initialized) = _nextInitializedTickWithinOneWord(poolVariables, tick, !upper);
 
-        if (!initialized && !upper) {
-            // We may have hit a word boundary, so check the next word before jumping.
-            (tickNext, initialized) = _nextInitializedTickWithinOneWord(poolVariables, tick - 1, !upper);
-            if (initialized) return tickNext;
-        }
-
         int24 tickMax =
             upper ? TickMath.getTickAtSqrtRatio(sqrtPriceX96Tgt) + 1 : TickMath.getTickAtSqrtRatio(sqrtPriceX96Tgt);
 
-        // TODO: Add a test that searches through multiple word boundaries.
+        // tick next at this point is either 
+        // initialized (never enters this loop) or a word boundry
         while (!initialized && (upper ? tickNext < tickMax : tickNext > tickMax)) {
-            tick = upper
-                ? tick + TICK_WORD_LENGTH * poolVariables.tickSpacing
-                : tick - TICK_WORD_LENGTH * poolVariables.tickSpacing;
-            (tickNext, initialized) = _nextInitializedTickWithinOneWord(poolVariables, tick, !upper);
+            (tickNext, initialized) = _nextInitializedTickWithinOneWord(poolVariables, upper ? tickNext : tickNext - 1, !upper);
         }
-
-        return tickNext;
     }
 }
