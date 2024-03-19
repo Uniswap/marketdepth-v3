@@ -98,9 +98,11 @@ contract DepthTest is Test {
         returns (uint256[] memory)
     {
         uint256[] memory depths = new uint256[](1);
+        address[] memory addresses = new address[](1);
 
         for (uint256 i = 0; i < depths.length; i++) {
             depths[i] = sqrtPriceRatioX96;
+            addresses[i] = poolAddress;
         }
 
         IDepth.DepthConfig[] memory config = new IDepth.DepthConfig[](1);
@@ -108,7 +110,7 @@ contract DepthTest is Test {
             config[i] = IDepth.DepthConfig({side: side, amountInToken0: amountInToken0, exact: false});
         }
 
-        uint256[] memory depthsMultiple = depth.calculateDepths(poolAddress, depths, config);
+        uint256[] memory depthsMultiple = depth.calculateDepths(addresses, depths, config);
 
         return depthsMultiple;
     }
@@ -123,8 +125,8 @@ contract DepthTest is Test {
         int24 tickSpacing = pool.tickSpacing();
 
         // tick in our fuzzer are between -32,768 and 32,767 (int16)
-        // the max depth that we are testing is ~(-1000, 1000), thus thus we 
-        // truncate to -32,768 / 32 = -1,024 and 32,767 // 32 = 1023, 
+        // the max depth that we are testing is ~(-1000, 1000), thus thus we
+        // truncate to -32,768 / 32 = -1,024 and 32,767 // 32 = 1023,
         // which are approx in our range for testing
         delta.tickLower = int16(delta.tickLower) / int16(1 << 5);
         delta.tickUpper = int16(delta.tickUpper) / int16(1 << 5);

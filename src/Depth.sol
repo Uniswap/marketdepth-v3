@@ -16,18 +16,18 @@ contract Depth is IDepth {
     using DepthLibrary for IDepth.DepthConfig;
     using PoolTickBitmap for IDepth.PoolVariables;
 
-    function calculateDepths(address pool, uint256[] memory sqrtDepthX96, DepthConfig[] memory configs)
+    function calculateDepths(address[] memory pools, uint256[] memory sqrtDepthX96, DepthConfig[] memory configs)
         external
         view
         override
         returns (uint256[] memory amounts)
     {
-        require(sqrtDepthX96.length == configs.length, "LengthMismatch");
+        require(sqrtDepthX96.length == configs.length && pools.length == sqrtDepthX96.length, "LengthMismatch");
         amounts = new uint256[](sqrtDepthX96.length);
 
-        IDepth.PoolVariables memory poolVariables = _initializePoolVariables(pool);
-
+        IDepth.PoolVariables memory poolVariables;
         for (uint256 i = 0; i < sqrtDepthX96.length; i++) {
+            poolVariables = poolVariables.pool != pools[i] ? _initializePoolVariables(pools[i]) : poolVariables;
             amounts[i] = _calculateDepth(poolVariables, configs[i], sqrtDepthX96[i]);
         }
         return amounts;

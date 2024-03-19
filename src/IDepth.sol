@@ -10,6 +10,7 @@ interface IDepth {
         Lower,
         Upper,
         Both // Both auto executes logic for depth on Side.Lower and Side.Upper.
+
     }
 
     struct DepthConfig {
@@ -29,11 +30,11 @@ interface IDepth {
     }
 
     /// @notice Calculates the market depth (the amount available to trade in or out) for the requested pools
-    /// @param pool The address of the pool to calculate market depth in
+    /// @param pools The addresses of the pools to calculate market depth in
     /// @param sqrtDepthX96 An array of depths to calculate
     /// @param configs An array of depth configuration for each depth calculation
     /// @return amounts The market depth of the pool with the requested depth and using the provided config
-    function calculateDepths(address pool, uint256[] memory sqrtDepthX96, DepthConfig[] memory configs)
+    function calculateDepths(address[] memory pools, uint256[] memory sqrtDepthX96, DepthConfig[] memory configs)
         external
         returns (uint256[] memory amounts);
 }
