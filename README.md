@@ -19,3 +19,21 @@ We test using a python script with ffi so you need to install eth_abi
 
 Then run the tests with:
 `forge test --ffi`
+
+### Deploy Script
+
+```
+forge script --broadcast \
+--rpc-url <RPC_URL> \
+--private-key <PRIV_KEY> \
+DeployDepth \
+--etherscan-api-key <API_KEY> \
+--verify
+```
+
+
+### Deployment Addresses
+
+| Address           | Chain | 
+| :---------------- | :------: |
+| [0xf25f64ad3f1e4100e97c0a74cdf31519bedab249](https://etherscan.io/address/0xf25f64ad3f1e4100e97c0a74cdf31519bedab249)    |   Mainnet   | 
